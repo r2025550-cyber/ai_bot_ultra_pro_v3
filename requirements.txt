@@ -1,0 +1,6 @@
+pyTelegramBotAPI
+openai
+apscheduler
+pandas
+python-dateutil
+pytz
