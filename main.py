@@ -176,4 +176,4 @@ def handle_error(exception):
 # =============== RUN ==================
 if __name__=="__main__":
     print("Bot running v3...")
-    bot.infinity_polling()
+    bot.infinity_polling(timeout=60, long_polling_timeout=20)
