@@ -1,11 +1,13 @@
 """
-Ultra-Pro Telegram AI Bot v4
-(with AI Vision + Promotions + Scheduler + Panel + Stickers + GIFs + Advanced Buttons)
+Ultra-Pro Telegram AI Bot v3 (with AI Vision + Promotions + Scheduler + Panel + Stickers + GIFs)
 """
 
 import os, json, logging
 from telebot import TeleBot, types
-from openai import OpenAI
+from ai_helpers import AIHelper
+from utils.db import Database
+from utils.scheduler import SchedulerManager
+from utils.panel import owner_panel_markup
 
 # --- Load env vars ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -21,7 +23,7 @@ if not TELEGRAM_TOKEN or ":" not in TELEGRAM_TOKEN:
 # --- Initialize bot ---
 bot = TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
 
-# --- Load config.json if present ---
+# --- Load config.json (optional fallback) ---
 if os.path.exists("config.json"):
     with open("config.json","r") as f:
         CONFIG = json.load(f)
@@ -30,112 +32,57 @@ if os.path.exists("config.json"):
     OWNER_ID = int(CONFIG.get("OWNER_ID", OWNER_ID))
     DEFAULT_TIMEZONE = CONFIG.get("DEFAULT_TIMEZONE", DEFAULT_TIMEZONE)
 
-bot = TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
-
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Dummy Database + Scheduler (replace with real)
-class Database:
-    def __init__(self, path): self.groups=set(); self.users=set()
-    def add_group(self, gid): self.groups.add(gid)
-    def get_groups(self): return list(self.groups)
-    def add_memory(self, uid, role, text): pass
-    def get_memory(self, uid, limit=5): return []
-    def count_users(self): return len(self.users)
-    def list_schedules(self): return []
-    def add_schedule(self,*a): pass
-    def clear_schedules(self): pass
-
-class SchedulerManager:
-    def __init__(self, bot, db, timezone): pass
-    def cancel_all(self): pass
-    def restore_jobs_from_db(self): pass
-    def schedule_broadcast(self, run_time, payload, media, r): return "job123"
-
+# --- Core helpers ---
 db = Database("data/memory.db")
+ai = AIHelper(openai_api_key=OPENAI_API_KEY)
 scheduler = SchedulerManager(bot, db, timezone=DEFAULT_TIMEZONE)
 
-# --- AI Helper ---
-class AIHelper:
-    def __init__(self, client): self.client = client
-
-    def chat_reply(self, user_message, memory=None):
-        context = ""
-        if memory:
-            for role, content in memory:
-                context += f"{role}: {content}\n"
-        prompt = f"{context}\nUser: {user_message}\nAssistant:"
-
-        response = self.client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful Telegram AI assistant."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        return response.choices[0].message.content.strip()
-
-    def vision_describe(self, image_url):
-        response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": [
-                    {"type": "text", "text": "Describe this image"},
-                    {"type": "image_url", "image_url": {"url": image_url}}
-                ]}
-            ]
-        )
-        return response.choices[0].message.content.strip()
-
-ai = AIHelper(openai_client)
-
-# --- Start Command with Buttons ---
+# =============== START + BUTTONS ==================
 @bot.message_handler(commands=["start"])
 def start(msg: types.Message):
     db.add_group(msg.chat.id)
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("➕ Add Me To Your Group", url=f"https://t.me/{bot.get_me().username}?startgroup=true"))
-    kb.add(types.InlineKeyboardButton("👤 Profile", callback_data="profile"),
-           types.InlineKeyboardButton("ℹ️ Help", callback_data="help"))
-    if msg.from_user.id == OWNER_ID:
-        kb.add(types.InlineKeyboardButton("⚙️ Owner Panel", callback_data="owner_panel"))
-    bot.reply_to(msg, "🤖 Ultra-Pro AI Bot v4 ready! Choose an option below:", reply_markup=kb)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("➕ Add me to your Group", url=f"https://t.me/{bot.get_me().username}?startgroup=true"))
+    markup.add(types.InlineKeyboardButton("ℹ️ Help", callback_data="help"),
+               types.InlineKeyboardButton("📊 Stats", callback_data="stats"))
+    markup.add(types.InlineKeyboardButton("💬 Support", url="https://t.me/your_support_channel"))
+    bot.reply_to(msg, "🤖 Ultra-Pro AI Bot v3 ready!\nUse /panel for owner controls.", reply_markup=markup)
 
-# --- Callback Buttons ---
-@bot.callback_query_handler(func=lambda c: True)
-def cb(call: types.CallbackQuery):
-    if call.data == "profile":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, f"👤 Your Profile\nID: {call.from_user.id}\nName: {call.from_user.first_name}")
-    elif call.data == "help":
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "ℹ️ Use me to chat with AI, generate image captions, schedule broadcasts, and more!")
-    elif call.data == "owner_panel":
-        if call.from_user.id != OWNER_ID:
-            return bot.answer_callback_query(call.id, "❌ Not allowed")
-        panel(call.message)
-
-# --- Owner Panel ---
-def owner_panel_markup():
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("📋 Groups", callback_data="list_groups"))
-    kb.add(types.InlineKeyboardButton("📝 New Schedule", callback_data="new_schedule"))
-    kb.add(types.InlineKeyboardButton("🚀 Instant Broadcast", callback_data="instant_broadcast"))
-    kb.add(types.InlineKeyboardButton("❌ Cancel All", callback_data="cancel_schedules"))
-    return kb
-
+# =============== OWNER PANEL ==================
 @bot.message_handler(commands=["panel"])
 def panel(msg: types.Message):
-    if msg.from_user.id!=OWNER_ID:
+    if msg.from_user.id != OWNER_ID:
         return bot.reply_to(msg,"❌ Not allowed.")
     bot.send_message(OWNER_ID,"⚙️ Owner Panel",reply_markup=owner_panel_markup())
 
-# --- Broadcast Commands ---
+@bot.callback_query_handler(func=lambda c: True)
+def cb(call: types.CallbackQuery):
+    if call.from_user.id != OWNER_ID:
+        return bot.answer_callback_query(call.id,"❌ Not allowed")
+    if call.data=="list_groups":
+        groups=db.get_groups()
+        bot.send_message(OWNER_ID,"📋 Groups:\n"+("\n".join(map(str,groups)) if groups else "None"))
+    elif call.data=="new_schedule":
+        bot.send_message(OWNER_ID,"📝 Use /schedule YYYY-MM-DD HH:MM <None/daily/weekly/monthly> Message")
+    elif call.data=="instant_broadcast":
+        bot.send_message(OWNER_ID,"🚀 Use /broadcast or /broadcast_media")
+    elif call.data=="cancel_schedules":
+        scheduler.cancel_all(); db.clear_schedules()
+        bot.send_message(OWNER_ID,"✅ All schedules cleared.")
+    elif call.data=="help":
+        bot.send_message(OWNER_ID,"ℹ️ Help: Use /broadcast, /schedule, /panel for controls.")
+    elif call.data=="stats":
+        g=len(db.get_groups()); u=db.count_users(); s=len(db.list_schedules())
+        bot.send_message(OWNER_ID,f"📊 Stats\nGroups:{g}\nUsers:{u}\nSchedules:{s}")
+
+# =============== BROADCAST ==================
 @bot.message_handler(commands=["broadcast"])
 def broadcast(msg):
-    if msg.from_user.id!=OWNER_ID: return
+    if msg.from_user.id != OWNER_ID: return
     text=msg.text.replace("/broadcast","").strip()
     for gid in db.get_groups():
         try: bot.send_message(gid,f"📢 {text}")
@@ -144,7 +91,7 @@ def broadcast(msg):
 
 @bot.message_handler(commands=["broadcast_media"])
 def broadcast_media(msg):
-    if msg.from_user.id!=OWNER_ID: return
+    if msg.from_user.id != OWNER_ID: return
     if not msg.reply_to_message: return bot.reply_to(msg,"Reply to media with /broadcast_media")
     r=msg.reply_to_message
     for gid in db.get_groups():
@@ -155,27 +102,59 @@ def broadcast_media(msg):
         except: continue
     bot.reply_to(msg,"✅ Media broadcast sent.")
 
-# --- AI Chat ---
-@bot.message_handler(func=lambda m: True,content_types=["text"])
-def chat(msg):
-    db.add_group(msg.chat.id)
-    uid=str(msg.from_user.id)
-    db.add_memory(uid,"user",msg.text)
-    mem=db.get_memory(uid,limit=6)
-    reply=ai.chat_reply(msg.text,mem)
-    db.add_memory(uid,"assistant",reply)
-    bot.send_message(msg.chat.id,reply)
+# =============== SCHEDULER ==================
+@bot.message_handler(commands=["schedule"])
+def schedule(msg):
+    if msg.from_user.id!=OWNER_ID: return
+    parts=msg.text.split(" ",4)
+    if len(parts)<4 and not msg.reply_to_message:
+        return bot.reply_to(msg,"Usage: /schedule YYYY-MM-DD HH:MM <recurring> message")
+    _,d,t,r=parts[:4]; payload=parts[4] if len(parts)>4 else ""
+    media=None
+    if msg.reply_to_message:
+        rm=msg.reply_to_message
+        if rm.photo: media=rm.photo[-1].file_id
+        elif rm.video: media=rm.video.file_id
+        elif rm.document: media=rm.document.file_id
+        if not payload: payload=rm.caption or ""
+    run_time=f"{d} {t}"
+    jobid=scheduler.schedule_broadcast(run_time,payload,media,r)
+    db.add_schedule(jobid,payload,media,run_time,r)
+    bot.reply_to(msg,f"✅ Scheduled {run_time} recurring={r}")
 
-# --- Image, Sticker, GIF ---
+# =============== AI CHAT ==================
+@bot.message_handler(func=lambda m: True, content_types=["text"])
+def chat(msg):
+    try:
+        db.add_group(msg.chat.id)
+        uid=str(msg.from_user.id)
+        db.add_memory(uid,"user",msg.text)
+        mem=db.get_memory(uid,limit=6)
+        reply=ai.chat_reply(msg.text,mem)
+        db.add_memory(uid,"assistant",reply)
+        bot.send_message(msg.chat.id,reply)
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        bot.reply_to(msg,"⚠️ AI error, please try again later.")
+
+# =============== IMAGE, STICKER, GIF ==================
 @bot.message_handler(content_types=["photo"])
 def photo(msg: types.Message):
-    file_info = bot.get_file(msg.photo[-1].file_id)
-    file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
-    try:
-        vision_reply=ai.vision_describe(file_url)
-        bot.reply_to(msg,f"🖼️ {vision_reply}")
-    except Exception:
-        bot.reply_to(msg,"🖼️ Nice picture!")
+    uid=str(msg.from_user.id)
+    caption=msg.caption or ""
+    if caption:
+        mem=db.get_memory(uid,limit=5)
+        reply=ai.chat_reply(caption,mem)
+        bot.reply_to(msg,reply)
+    else:
+        try:
+            file_info = bot.get_file(msg.photo[-1].file_id)
+            file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
+            vision_reply=ai.vision_describe(file_url)
+            bot.reply_to(msg,f"🖼️ {vision_reply}")
+        except Exception as e:
+            logger.error(f"Vision error: {e}")
+            bot.reply_to(msg,"🖼️ Nice picture!")
 
 @bot.message_handler(content_types=["sticker"])
 def sticker(msg: types.Message):
@@ -186,9 +165,15 @@ def sticker(msg: types.Message):
 def gif(msg: types.Message):
     bot.reply_to(msg,"😂🔥 Cool GIF!")
 
-# --- Run Bot ---
+# =============== RESTORE + ERROR HANDLER ==================
 scheduler.restore_jobs_from_db()
 
+@bot.error_handler
+def handle_error(exception):
+    logger.error(f"⚠️ ERROR: {exception}")
+    return True
+
+# =============== RUN ==================
 if __name__=="__main__":
-    print("Bot running v4...")
+    print("Bot running v3...")
     bot.infinity_polling()
