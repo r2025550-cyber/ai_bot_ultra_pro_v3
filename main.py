@@ -6,7 +6,6 @@ import os
 import json
 import logging
 import time
-import random
 from telebot import TeleBot, types
 from utils.ai_helpers import AIHelper
 from utils.db import Database
@@ -43,7 +42,7 @@ print("DEBUG >> OPENAI_API_KEY starts with:", mask_secret(OPENAI_API_KEY, 8))
 print("DEBUG >> OWNER_ID:", OWNER_ID)
 print("DEBUG >> DEFAULT_TIMEZONE:", DEFAULT_TIMEZONE)
 
-# --- Validate Telegram token (do after loading fallbacks) ---
+# --- Validate Telegram token ---
 if not TELEGRAM_TOKEN or ":" not in TELEGRAM_TOKEN:
     raise ValueError(f"❌ TELEGRAM_TOKEN invalid or missing! Got: {mask_secret(TELEGRAM_TOKEN)}")
 
@@ -57,7 +56,7 @@ logger = logging.getLogger(__name__)
 # --- Core helpers ---
 db = Database("data/memory.db")
 
-# --- AI helper: instantiate only if key present and looks like a key ---
+# --- AI helper ---
 ai = None
 if OPENAI_API_KEY and isinstance(OPENAI_API_KEY, str) and OPENAI_API_KEY.strip():
     try:
@@ -70,6 +69,18 @@ else:
     logger.warning("OPENAI_API_KEY not configured. AI features will be disabled.")
 
 scheduler = SchedulerManager(bot, db, timezone=DEFAULT_TIMEZONE)
+
+# --- Cooldown system (user_id -> last_reply_time) ---
+user_cooldowns = {}
+COOLDOWN_SECONDS = 5
+
+def can_reply(user_id: str) -> bool:
+    now = time.time()
+    last_time = user_cooldowns.get(user_id, 0)
+    if now - last_time >= COOLDOWN_SECONDS:
+        user_cooldowns[user_id] = now
+        return True
+    return False
 
 # =============== START + BUTTONS ==================
 @bot.message_handler(commands=["start"])
@@ -190,11 +201,14 @@ def chat(msg):
     try:
         db.add_group(msg.chat.id)
         uid = str(msg.from_user.id)
+
+        if not can_reply(uid):
+            return  # skip if cooldown not passed
+
         db.add_memory(uid, "user", msg.text)
         mem = db.get_memory(uid, limit=6)
 
         if not ai:
-            logger.warning("AI request received but OPENAI_API_KEY not configured.")
             bot.send_message(msg.chat.id, "⚠️ AI is not configured. Please contact the bot owner.")
             return
 
@@ -232,33 +246,20 @@ def photo(msg: types.Message):
 
 @bot.message_handler(content_types=["sticker"])
 def sticker(msg: types.Message):
-    db.add_group(msg.chat.id)
-    uid = str(msg.from_user.id)
     emoji = msg.sticker.emoji if msg.sticker else "🙂"
-
-    db.add_memory(uid, "user", f"[Sticker: {emoji}]")
-    bot.reply_to(msg, f"{emoji} Nice sticker!")
-
     try:
-        stickers = [
-            # Replace with actual sticker IDs
-            "CAACAgUAAxkBAAEBQF5l3...",
-            "CAACAgUAAxkBAAEBQF5l4...",
-            "CAACAgUAAxkBAAEBQF5l5..."
-        ]
-        chosen = random.choice(stickers)
-        bot.send_sticker(msg.chat.id, chosen)
-        db.add_memory(uid, "assistant", "[Sticker Reply Sent]")
+        if ai and can_reply(str(msg.from_user.id)):
+            reply = ai.chat_reply(f"User sent a {emoji} sticker. Reply playfully like roleplay.")
+            bot.reply_to(msg, reply)
+        else:
+            bot.reply_to(msg, f"{emoji} Nice sticker!")
     except Exception as e:
         logger.error(f"Sticker reply error: {e}")
+        bot.reply_to(msg, f"{emoji} (sticker received)")
 
 @bot.message_handler(content_types=["animation"])
 def gif(msg: types.Message):
-    db.add_group(msg.chat.id)
-    uid = str(msg.from_user.id)
-    db.add_memory(uid, "user", "[GIF Sent]")
     bot.reply_to(msg, "😂🔥 Cool GIF!")
-    db.add_memory(uid, "assistant", "Cool GIF Reply")
 
 # =============== RESTORE SCHEDULES ==================
 try:
