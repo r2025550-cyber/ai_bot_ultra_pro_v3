@@ -1,11 +1,13 @@
-# utils/ai_helpers.py
-
 from openai import OpenAI
 
 class AIHelper:
     def __init__(self, openai_api_key: str):
-        if not openai_api_key or not openai_api_key.startswith("sk-"):
+        # Allow both old (sk-xxx) and new (sk-proj-xxx) formats
+        if not openai_api_key or not (
+            openai_api_key.startswith("sk-") or openai_api_key.startswith("sk-proj-")
+        ):
             raise ValueError("❌ OPENAI_API_KEY is missing or invalid!")
+
         self.client = OpenAI(api_key=openai_api_key)
 
     def chat_reply(self, user_text: str, memory=[]):
