@@ -86,7 +86,7 @@ def broadcast(msg):
     text=msg.text.replace("/broadcast","").strip()
     for gid in db.get_groups():
         try: bot.send_message(gid,f"📢 {text}")
-        except: continue
+        except Exception as e: logger.error(f"Broadcast error: {e}")
     bot.reply_to(msg,"✅ Broadcast sent.")
 
 @bot.message_handler(commands=["broadcast_media"])
@@ -99,7 +99,7 @@ def broadcast_media(msg):
             if r.photo: bot.send_photo(gid,r.photo[-1].file_id,caption=r.caption or "")
             elif r.video: bot.send_video(gid,r.video.file_id,caption=r.caption or "")
             elif r.document: bot.send_document(gid,r.document.file_id,caption=r.caption or "")
-        except: continue
+        except Exception as e: logger.error(f"Broadcast media error: {e}")
     bot.reply_to(msg,"✅ Media broadcast sent.")
 
 # =============== SCHEDULER ==================
@@ -165,15 +165,14 @@ def sticker(msg: types.Message):
 def gif(msg: types.Message):
     bot.reply_to(msg,"😂🔥 Cool GIF!")
 
-# =============== RESTORE + ERROR HANDLER ==================
+# =============== RESTORE SCHEDULES ==================
 scheduler.restore_jobs_from_db()
-
-@bot.error_handler
-def handle_error(exception):
-    logger.error(f"⚠️ ERROR: {exception}")
-    return True
 
 # =============== RUN ==================
 if __name__=="__main__":
     print("Bot running v3...")
-    bot.infinity_polling(timeout=60, long_polling_timeout=20)
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=20)
+        except Exception as e:
+            logger.error(f"⚠️ Polling crashed: {e}, restarting...")
