@@ -244,15 +244,27 @@ def photo(msg: types.Message):
             logger.error(f"Vision error: {e}")
             bot.reply_to(msg, "🖼️ Nice picture!")
 
+import random
+
+STICKER_IDS = [
+    "CAACAAMCBQADGQEAATtV1GjNNgY3TXi8FZQ0unLzY-5eClLcAAI7FQACbMwgVFrPF5hMaq5UAQAHbQADNgQ",  # example
+    "AAMCAQADGQEAATtV82jNOe4vc13Kr484n0SEC0sZsuS1AALuAAMgCvBGK0DwzH_0fqwBAAdtAAM2BA",
+]
+
 @bot.message_handler(content_types=["sticker"])
 def sticker(msg: types.Message):
     emoji = msg.sticker.emoji if msg.sticker else "🙂"
     try:
-        if ai and can_reply(str(msg.from_user.id)):
+        # 50% chance AI roleplay, 50% chance sticker reply
+        if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.5:
             reply = ai.chat_reply(f"User sent a {emoji} sticker. Reply playfully like roleplay.")
             bot.reply_to(msg, reply)
         else:
-            bot.reply_to(msg, f"{emoji} Nice sticker!")
+            if STICKER_IDS:
+                sticker_id = random.choice(STICKER_IDS)
+                bot.send_sticker(msg.chat.id, sticker_id, reply_to_message_id=msg.message_id)
+            else:
+                bot.reply_to(msg, f"{emoji} Nice sticker!")
     except Exception as e:
         logger.error(f"Sticker reply error: {e}")
         bot.reply_to(msg, f"{emoji} (sticker received)")
