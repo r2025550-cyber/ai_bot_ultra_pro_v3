@@ -1,4 +1,3 @@
-
 # utils/ai_helpers.py
 
 from openai import OpenAI
