@@ -1,5 +1,5 @@
 """
-Ultra-Pro Telegram AI Bot v3 (with AI Vision + Promotions + Scheduler + Panel + Stickers + GIFs + Roleplay + Admin Control)
+Ultra-Pro Telegram AI Bot v3 (with AI Vision + Promotions + Scheduler + Panel + Stickers + GIFs + Roleplay + Admin Control + Sticker Grabber)
 """
 
 import os
@@ -81,25 +81,18 @@ def can_reply(user_id: str) -> bool:
 
 # --- Should reply logic ---
 def should_reply(msg: types.Message) -> bool:
-    # Always reply in private chat
     if msg.chat.type == "private":
         return True
-
     text = msg.text or ""
     entities = msg.entities or []
     bot_username = bot.get_me().username.lower()
-
-    # Agar kisi ko mention kiya hai aur wo bot nahi hai -> skip
     for ent in entities:
         if ent.type == "mention":
             mention = text[ent.offset:ent.offset+ent.length].lower()
             if bot_username not in mention:
                 return False
-
-    # Agar sirf bot mention hai -> reply
     if f"@{bot_username}" in text.lower():
         return True
-
     return False
 
 # =============== START ==================
@@ -114,7 +107,8 @@ def start(msg: types.Message):
     markup.add(
         types.InlineKeyboardButton("ℹ️ Help", callback_data="help"),
         types.InlineKeyboardButton("📊 Stats", callback_data="stats"),
-        types.InlineKeyboardButton("⚡ Manage Admins", callback_data="manage_admins")
+        types.InlineKeyboardButton("⚡ Manage Admins", callback_data="manage_admins"),
+        types.InlineKeyboardButton("📋 Sticker Grabber", callback_data="sticker_grabber")
     )
     markup.add(types.InlineKeyboardButton("💬 Support", url="https://t.me/your_support_channel"))
     bot.reply_to(msg, "🤖 Ultra-Pro AI Bot v3 ready!\nUse /panel for owner controls.", reply_markup=markup)
@@ -126,6 +120,7 @@ def panel(msg: types.Message):
         return bot.reply_to(msg, "❌ Not allowed.")
     markup = owner_panel_markup()
     markup.add(types.InlineKeyboardButton("⚡ Manage Admins", callback_data="manage_admins"))
+    markup.add(types.InlineKeyboardButton("📋 Sticker Grabber", callback_data="sticker_grabber"))
     bot.send_message(OWNER_ID, "⚙️ Owner Panel", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: True)
@@ -156,9 +151,21 @@ def cb(call: types.CallbackQuery):
                 bot.send_message(OWNER_ID, f"⚡ Current Admins:\n{admin_list}")
             except Exception as e:
                 bot.send_message(OWNER_ID, f"⚠️ Failed to fetch admins: {e}")
+        elif call.data == "sticker_grabber":
+            bot.send_message(OWNER_ID, "🖼️ Reply to any sticker with /grabsticker to fetch its file_id.")
     except Exception as e:
         logger.error("Callback handler error: %s", e)
         bot.answer_callback_query(call.id, "⚠️ Error processing action.")
+
+# =============== STICKER GRABBER ==================
+@bot.message_handler(commands=["grabsticker"])
+def grab_sticker(msg: types.Message):
+    if msg.from_user.id != OWNER_ID:
+        return bot.reply_to(msg, "❌ Not allowed.")
+    if not msg.reply_to_message or not msg.reply_to_message.sticker:
+        return bot.reply_to(msg, "⚠️ Reply to a sticker with this command to grab its file_id.")
+    sticker_id = msg.reply_to_message.sticker.file_id
+    bot.reply_to(msg, f"✅ Sticker file_id:\n<code>{sticker_id}</code>", parse_mode="HTML")
 
 # =============== AI CHAT ==================
 @bot.message_handler(func=lambda m: True, content_types=["text"])
