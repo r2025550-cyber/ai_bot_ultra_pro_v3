@@ -81,18 +81,36 @@ def can_reply(user_id: str) -> bool:
 
 # --- Should reply logic ---
 def should_reply(msg: types.Message) -> bool:
+    # Private chat -> always reply
     if msg.chat.type == "private":
         return True
+
     text = msg.text or ""
     entities = msg.entities or []
     bot_username = bot.get_me().username.lower()
+
+    mentioned_someone = False
+    mentioned_bot = False
+
     for ent in entities:
         if ent.type == "mention":
             mention = text[ent.offset:ent.offset+ent.length].lower()
-            if bot_username not in mention:
-                return False
-    if f"@{bot_username}" in text.lower():
+            mentioned_someone = True
+            if bot_username in mention:
+                mentioned_bot = True
+
+    # Agar bot mention hai -> reply
+    if mentioned_bot:
         return True
+
+    # Agar sirf dusre ko mention kiya -> skip
+    if mentioned_someone and not mentioned_bot:
+        return False
+
+    # Agar koi mention nahi hai -> normal reply kare
+    if not mentioned_someone:
+        return True
+
     return False
 
 # =============== START ==================
