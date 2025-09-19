@@ -4,7 +4,7 @@ Ultra-Pro Telegram AI Bot v3 (with AI Vision + Promotions + Scheduler + Panel + 
 
 import os, json, logging
 from telebot import TeleBot, types
-from ai_helpers import AIHelper
+from utils.ai_helpers import AIHelper
 from utils.db import Database
 from utils.scheduler import SchedulerManager
 from utils.panel import owner_panel_markup
