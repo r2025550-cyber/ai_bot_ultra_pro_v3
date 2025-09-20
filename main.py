@@ -619,12 +619,15 @@ def _broadcast_confirm_cancel(call: types.CallbackQuery):
             groups = db.get_groups()
             sent = 0
             for gid in groups:
-                try:
-                    bot.send_message(gid, text)
-                    sent += 1
-                    time.sleep(0.06)
-                except Exception as e:
-                    logger.warning("Broadcast text failed to %s: %s", gid, e)
+    try:
+        bot.send_message(gid, text)
+        sent += 1
+        time.sleep(0.06)
+    except Exception as e:
+        if "not enough rights" in str(e).lower():
+            logger.warning(f"Skipped {gid}: No permission to send.")
+        else:
+            logger.warning(f"Broadcast text failed to {gid}: {e}")
             broadcast_sessions.pop(uid, None)
             bot.send_message(uid, f"✅ Broadcast text sent to {sent} groups.")
             return
@@ -650,15 +653,18 @@ def _broadcast_confirm_cancel(call: types.CallbackQuery):
             groups = db.get_groups()
             sent = 0
             for gid in groups:
-                try:
-                    if media_type == "photo":
-                        bot.send_photo(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
-                    elif media_type == "video":
-                        bot.send_video(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
-                    sent += 1
-                    time.sleep(0.09)
-                except Exception as e:
-                    logger.warning("Broadcast media failed to %s: %s", gid, e)
+    try:
+        if media_type == "photo":
+            bot.send_photo(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
+        elif media_type == "video":
+            bot.send_video(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
+        sent += 1
+        time.sleep(0.09)
+    except Exception as e:
+        if "not enough rights" in str(e).lower():
+            logger.warning(f"Skipped {gid}: No permission to send.")
+        else:
+            logger.warning(f"Broadcast media failed to {gid}: {e}")
             broadcast_sessions.pop(uid, None)
             bot.send_message(uid, f"✅ Broadcast media sent to {sent} groups.")
             return
