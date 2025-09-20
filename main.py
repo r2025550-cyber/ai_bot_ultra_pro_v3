@@ -243,6 +243,28 @@ def sticker(msg: types.Message):
 def gif(msg: types.Message):
     bot.reply_to(msg, "😂🔥 Cool GIF!")
 
+# =============== WELCOME + GOODBYE ==================
+WELCOME_MSG = "🌸 Hey {name}, welcome to {chat}! 💖 Butki family me swagat hai 🎉"
+GOODBYE_MSG = "👋 Bye {name}, hope to see you again in {chat}! 💫"
+
+@bot.message_handler(content_types=["new_chat_members"])
+def welcome(msg: types.Message):
+    for user in msg.new_chat_members:
+        try:
+            text = WELCOME_MSG.format(name=user.first_name, chat=msg.chat.title)
+            bot.send_message(msg.chat.id, text)
+        except Exception as e:
+            logger.error(f"Welcome error: {e}")
+
+@bot.message_handler(content_types=["left_chat_member"])
+def goodbye(msg: types.Message):
+    user = msg.left_chat_member
+    try:
+        text = GOODBYE_MSG.format(name=user.first_name, chat=msg.chat.title)
+        bot.send_message(msg.chat.id, text)
+    except Exception as e:
+        logger.error(f"Goodbye error: {e}")
+
 # =============== RESTORE SCHEDULES ==================
 try:
     scheduler.restore_jobs_from_db()
