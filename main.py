@@ -240,15 +240,6 @@ def panel(msg: types.Message):
     markup.add(types.InlineKeyboardButton("📢 Broadcast Manager", callback_data="broadcast_manager"))
     bot.send_message(OWNER_ID, "⚙️ Owner Panel", reply_markup=markup)
 
-# =============== BROADCAST CALLBACKS (placeholder only, real handler is below) ==================
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("bc_"))
-def broadcast_cb_placeholder(call: types.CallbackQuery):
-    # Conflict avoid करने के लिए ऊपर वाला सिर्फ placeholder है
-    try:
-        bot.answer_callback_query(call.id, "⚠️ Broadcast handler moved down.")
-    except Exception:
-        pass
-
 # =============== GENERAL CALLBACKS ==================
 @bot.callback_query_handler(func=lambda c: True)
 def cb(call: types.CallbackQuery):
@@ -276,7 +267,6 @@ def cb(call: types.CallbackQuery):
             bot.send_message(OWNER_ID, "🖼️ Reply to any sticker with /grabsticker to fetch its file_id.")
         elif data == "broadcast_manager":
             show_broadcast_menu(call.from_user.id)
-        # ❌ NOTE: bc_ yaha handle mat karo, upar hi ho raha hai
         try:
             bot.answer_callback_query(call.id)
         except Exception:
