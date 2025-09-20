@@ -240,29 +240,14 @@ def panel(msg: types.Message):
     markup.add(types.InlineKeyboardButton("📢 Broadcast Manager", callback_data="broadcast_manager"))
     bot.send_message(OWNER_ID, "⚙️ Owner Panel", reply_markup=markup)
 
-# =============== BROADCAST CALLBACKS (fix order) ==================
-# pehle broadcast ke liye handler
+# =============== BROADCAST CALLBACKS (placeholder only, real handler is below) ==================
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("bc_"))
-def broadcast_cb(call: types.CallbackQuery):
-    user_id = call.from_user.id
-    if not is_admin(user_id):
-        return bot.answer_callback_query(call.id, "❌ Not allowed.")
-    data = call.data
+def broadcast_cb_placeholder(call: types.CallbackQuery):
+    # Conflict avoid करने के लिए ऊपर वाला सिर्फ placeholder है
     try:
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(call.id, "⚠️ Broadcast handler moved down.")
     except Exception:
         pass
-
-    if data == "bc_text":
-        broadcast_sessions[user_id] = {"state": "await_text"}
-        bot.send_message(user_id, "✍️ Send the TEXT you want to broadcast to all groups. Send /cancel to abort.")
-    elif data == "bc_media":
-        broadcast_sessions[user_id] = {"state": "await_media_upload"}
-        bot.send_message(user_id, "📸 Please send the IMAGE or VIDEO you want to broadcast (directly in this chat). Send /cancel to abort.")
-    elif data == "bc_schedule":
-        bot.send_message(user_id, "⏰ Scheduling from DM is not implemented in wizard. Use /schedule command.")
-    else:
-        bot.send_message(user_id, "⚠️ Unknown broadcast option.")
 
 # =============== GENERAL CALLBACKS ==================
 @bot.callback_query_handler(func=lambda c: True)
