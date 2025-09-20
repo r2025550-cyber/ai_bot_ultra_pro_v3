@@ -591,89 +591,76 @@ def _broadcast_wizard_text(msg: types.Message):
         logger.exception("broadcast wizard text handler error:")
         bot.reply_to(msg, "⚠️ Error during broadcast wizard.")
 
-# Callback handlers for confirm/cancel
-@bot.callback_query_handler(func=lambda c: c.data and (c.data.startswith("bc_confirm_") or c.data.startswith("bc_cancel:") ))
+# =============== CONFIRM/CANCEL HANDLERS ==================
+@bot.callback_query_handler(func=lambda c: c.data and (c.data.startswith("bc_confirm_text") or c.data.startswith("bc_confirm_media") or c.data.startswith("bc_cancel")))
 def _broadcast_confirm_cancel(call: types.CallbackQuery):
-    data = call.data or ""
+    uid = call.from_user.id
+    data = call.data
+    if not is_admin(uid):
+        return bot.answer_callback_query(call.id, "❌ Not allowed.")
     try:
-        # pattern bc_confirm_text:<uid>, bc_confirm_media:<uid>, bc_cancel:<uid>
-        if data.startswith("bc_cancel:"):
-            parts = data.split(":", 1)
-            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
-            if call.from_user.id != uid:
-                return bot.answer_callback_query(call.id, "❌ Not allowed.")
-            broadcast_sessions.pop(uid, None)
-            bot.answer_callback_query(call.id)
-            return bot.send_message(uid, "✅ Broadcast cancelled.")
-        if data.startswith("bc_confirm_text:"):
-            parts = data.split(":", 1)
-            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
-            if call.from_user.id != uid and not is_admin(call.from_user.id):
-                return bot.answer_callback_query(call.id, "❌ Not allowed.")
-            sess = broadcast_sessions.get(uid)
-            if not sess or "broadcast_text" not in sess:
-                bot.answer_callback_query(call.id, "⚠️ No text to send.")
-                return
-            text = sess["broadcast_text"]
-            bot.answer_callback_query(call.id, "Sending broadcast...")
-            groups = db.get_groups()
-            sent = 0
-            for gid in groups:
-    try:
-        bot.send_message(gid, text)
-        sent += 1
-        time.sleep(0.06)
-    except Exception as e:
-        if "not enough rights" in str(e).lower():
-            logger.warning(f"Skipped {gid}: No permission to send.")
-        else:
-            logger.warning(f"Broadcast text failed to {gid}: {e}")
-            broadcast_sessions.pop(uid, None)
-            bot.send_message(uid, f"✅ Broadcast text sent to {sent} groups.")
-            return
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
-        if data.startswith("bc_confirm_media:"):
-            parts = data.split(":", 1)
-            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
-            if call.from_user.id != uid and not is_admin(call.from_user.id):
-                return bot.answer_callback_query(call.id, "❌ Not allowed.")
-            sess = broadcast_sessions.get(uid)
-            if not sess or "media_file_id" not in sess:
-                bot.answer_callback_query(call.id, "⚠️ No media to send.")
-                return
-            media_type = sess.get("media_type")
-            file_id = sess.get("media_file_id")
-            caption = sess.get("caption", "")
-            link = sess.get("link")
-            btn_text = sess.get("button_text", "Open")
-            markup = types.InlineKeyboardMarkup()
-            if link:
-                markup.add(types.InlineKeyboardButton(btn_text, url=link))
-            bot.answer_callback_query(call.id, "Sending broadcast...")
-            groups = db.get_groups()
-            sent = 0
-            for gid in groups:
-    try:
-        if media_type == "photo":
-            bot.send_photo(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
-        elif media_type == "video":
-            bot.send_video(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
-        sent += 1
-        time.sleep(0.09)
-    except Exception as e:
-        if "not enough rights" in str(e).lower():
-            logger.warning(f"Skipped {gid}: No permission to send.")
-        else:
-            logger.warning(f"Broadcast media failed to {gid}: {e}")
-            broadcast_sessions.pop(uid, None)
-            bot.send_message(uid, f"✅ Broadcast media sent to {sent} groups.")
-            return
-    except Exception as e:
-        logger.exception("broadcast confirm handler error:")
-        try:
-            bot.answer_callback_query(call.id, "⚠️ Error processing broadcast.")
-        except Exception:
-            pass
+    # ---------- cancel ----------
+    if data.startswith("bc_cancel"):
+        broadcast_sessions.pop(uid, None)
+        return bot.send_message(uid, "❌ Broadcast cancelled.")
+
+    # ---------- text confirm ----------
+    if data.startswith("bc_confirm_text"):
+        sess = broadcast_sessions.pop(uid, None)
+        if not sess:
+            return bot.send_message(uid, "⚠️ Session expired.")
+        text = sess.get("broadcast_text", "")
+        groups = db.get_groups()
+        sent = 0
+        for gid in groups:
+            try:
+                bot.send_message(gid, text)
+                sent += 1
+                time.sleep(0.09)
+            except Exception as e:
+                if "not enough rights" in str(e).lower():
+                    logger.warning(f"Skipped {gid}: No permission to send.")
+                else:
+                    logger.warning(f"Broadcast text failed to {gid}: {e}")
+        return bot.send_message(uid, f"✅ Broadcast sent to {sent} groups.")
+
+    # ---------- media confirm ----------
+    if data.startswith("bc_confirm_media"):
+        sess = broadcast_sessions.pop(uid, None)
+        if not sess:
+            return bot.send_message(uid, "⚠️ Session expired.")
+        groups = db.get_groups()
+        sent = 0
+        media_type = sess.get("media_type")
+        file_id = sess.get("media_file_id")
+        caption = sess.get("caption", "")
+        link = sess.get("link")
+        btn_text = sess.get("button_text", "Open")
+
+        markup = types.InlineKeyboardMarkup()
+        if link:
+            markup.add(types.InlineKeyboardButton(btn_text, url=link))
+
+        for gid in groups:
+            try:
+                if media_type == "photo":
+                    bot.send_photo(gid, file_id, caption=caption or "",
+                                   reply_markup=markup if markup.inline_keyboard else None)
+                elif media_type == "video":
+                    bot.send_video(gid, file_id, caption=caption or "",
+                                   reply_markup=markup if markup.inline_keyboard else None)
+                sent += 1
+                time.sleep(0.09)
+            except Exception as e:
+                if "not enough rights" in str(e).lower():
+                    logger.warning(f"Skipped {gid}: No permission to send.")
+                else:
+                    logger.warning(f"Broadcast media failed to {gid}: {e}")
+        return bot.send_message(uid, f"✅ Media broadcast sent to {sent} groups.")
 
 # =============== STICKER GRABBER ==================
 @bot.message_handler(commands=["grabsticker"])
