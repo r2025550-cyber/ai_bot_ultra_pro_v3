@@ -1,5 +1,8 @@
+# main.py
 """
-Ultra-Pro Telegram AI Bot v3 (with AI Vision + Promotions + Scheduler + Panel + Stickers + GIFs + Roleplay + Admin Control + Sticker Grabber)
+Ultra-Pro Telegram AI Bot v3
+(with AI Vision + Promotions + Scheduler + Panel + Stickers + GIFs
++ Roleplay + Admin Control + Sticker Grabber + Broadcast Manager)
 """
 
 import os
@@ -7,6 +10,7 @@ import json
 import logging
 import time
 import random
+from typing import Optional
 from telebot import TeleBot, types
 from utils.ai_helpers import AIHelper
 from utils.db import Database
@@ -14,12 +18,18 @@ from utils.scheduler import SchedulerManager
 from utils.panel import owner_panel_markup
 
 # --- Helper: mask secrets for logs ---
-def mask_secret(s: str, visible: int = 8):
+def mask_secret(s: Optional[str], visible: int = 8):
     if not s:
         return "EMPTY"
+    s = str(s)
     if len(s) <= visible:
         return s[0] + "*" * (len(s)-1)
     return s[:visible] + "..."
+
+# --- Ensure data directory ---
+DATA_DIR = "data"
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
 
 # --- Load config.json ---
 CONFIG = {}
@@ -55,7 +65,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Core helpers ---
-db = Database("data/memory.db")
+db = Database(os.path.join(DATA_DIR, "memory.db"))
 ai = None
 if OPENAI_API_KEY:
     try:
@@ -67,9 +77,38 @@ if OPENAI_API_KEY:
 
 scheduler = SchedulerManager(bot, db, timezone=DEFAULT_TIMEZONE)
 
+# --- Admin persistence (data/admins.json) ---
+ADMINS_FILE = os.path.join(DATA_DIR, "admins.json")
+
+def load_admins():
+    try:
+        if os.path.exists(ADMINS_FILE):
+            with open(ADMINS_FILE, "r") as f:
+                data = json.load(f) or []
+                return set(int(x) for x in data)
+    except Exception as e:
+        logger.error("Failed to load admins file: %s", e)
+    return set()
+
+def save_admins(admins_set):
+    try:
+        with open(ADMINS_FILE, "w") as f:
+            json.dump(sorted(list(admins_set)), f)
+    except Exception as e:
+        logger.error("Failed to save admins file: %s", e)
+
+ADMINS = load_admins()
+# Ensure owner is always an admin
+if OWNER_ID:
+    ADMINS.add(OWNER_ID)
+save_admins(ADMINS)
+
+def is_admin(user_id: int) -> bool:
+    return user_id == OWNER_ID or (user_id in ADMINS)
+
 # --- Cooldown system ---
 user_cooldowns = {}
-COOLDOWN_SECONDS = 10  # increased to reduce spam
+COOLDOWN_SECONDS = 10  # reduce spam
 
 def can_reply(user_id: str) -> bool:
     now = time.time()
@@ -79,50 +118,81 @@ def can_reply(user_id: str) -> bool:
         return True
     return False
 
+# --- Bot identity (lazy) ---
+_cached_bot_username = None
+_cached_bot_id = None
+
+def refresh_bot_info():
+    global _cached_bot_username, _cached_bot_id
+    try:
+        me = bot.get_me()
+        if me:
+            _cached_bot_username = (me.username or "").lower()
+            _cached_bot_id = getattr(me, "id", None)
+    except Exception as e:
+        logger.debug("Could not get bot info right now: %s", e)
+
+# initial try
+refresh_bot_info()
+
 # --- Should reply logic (with human-reply ignore) ---
-BOT_USERNAME = bot.get_me().username.lower()
-BOT_ID = bot.get_me().id  # bot ka user_id
-
 def should_reply(msg: types.Message) -> bool:
-    # Private chat -> always reply
-    if msg.chat.type == "private":
-        return True
+    # refresh cached bot info if empty
+    if not _cached_bot_username or not _cached_bot_id:
+        refresh_bot_info()
+    bot_username = _cached_bot_username or ""
+    bot_id = _cached_bot_id
 
-    # Agar message kisi ka reply hai
-    if msg.reply_to_message:
-        # Agar reply bot ke message par hai → reply kare
-        if msg.reply_to_message.from_user and msg.reply_to_message.from_user.id == BOT_ID:
+    # Private chat -> always reply
+    try:
+        if msg.chat.type == "private":
             return True
-        # Agar reply kisi human member par hai → skip
-        else:
+    except Exception:
+        # fallback if chat type missing
+        pass
+
+    # If message is a reply to someone
+    if msg.reply_to_message:
+        try:
+            if msg.reply_to_message.from_user and bot_id and msg.reply_to_message.from_user.id == bot_id:
+                # reply to bot -> reply
+                return True
+            else:
+                # reply to other human -> ignore
+                return False
+        except Exception:
+            # On error default to not replying
             return False
 
-    text = msg.text or ""
+    text = (msg.text or "") + " "  # avoid empty slice errors
     entities = msg.entities or []
 
     mentioned_someone = False
     mentioned_bot = False
 
     for ent in entities:
-        if ent.type == "mention":
-            mention = text[ent.offset:ent.offset+ent.length].lower()
-            mentioned_someone = True
-            if BOT_USERNAME in mention:
-                mentioned_bot = True
+        try:
+            if ent.type == "mention":
+                mention = text[ent.offset:ent.offset + ent.length].lower()
+                mentioned_someone = True
+                if bot_username and bot_username in mention:
+                    mentioned_bot = True
+        except Exception:
+            continue
 
-    # Agar bot mention hai -> reply
+    # If bot is explicitly mentioned -> reply
     if mentioned_bot:
         return True
 
-    # Agar sirf dusre ko mention kiya -> skip
+    # If someone else is mentioned and bot is not -> don't reply
     if mentioned_someone and not mentioned_bot:
         return False
 
-    # Extra check: agar "@" hai but bot nahi mention hai -> skip
-    if "@" in text and not mentioned_bot:
+    # Extra: if there's an '@' sign but not bot mention -> skip (to avoid handles)
+    if "@" in text and not mentioned_bot and mentioned_someone:
         return False
 
-    # Agar koi mention nahi hai -> normal reply kare
+    # No mention and no reply -> normal reply
     if not mentioned_someone:
         return True
 
@@ -133,15 +203,20 @@ def should_reply(msg: types.Message) -> bool:
 def start(msg: types.Message):
     db.add_group(msg.chat.id)
     markup = types.InlineKeyboardMarkup()
-    bot_me = bot.get_me()
-    if bot_me and bot_me.username:
-        add_url = f"https://t.me/{bot_me.username}?startgroup=true"
-        markup.add(types.InlineKeyboardButton("➕ Add me to your Group", url=add_url))
+    try:
+        bot_me = bot.get_me()
+        if bot_me and bot_me.username:
+            add_url = f"https://t.me/{bot_me.username}?startgroup=true"
+            markup.add(types.InlineKeyboardButton("➕ Add me to your Group", url=add_url))
+    except Exception:
+        pass
+
     markup.add(
         types.InlineKeyboardButton("ℹ️ Help", callback_data="help"),
         types.InlineKeyboardButton("📊 Stats", callback_data="stats"),
         types.InlineKeyboardButton("⚡ Manage Admins", callback_data="manage_admins"),
-        types.InlineKeyboardButton("📋 Sticker Grabber", callback_data="sticker_grabber")
+        types.InlineKeyboardButton("📋 Sticker Grabber", callback_data="sticker_grabber"),
+        types.InlineKeyboardButton("📢 Broadcast Manager", callback_data="broadcast_manager")
     )
     markup.add(types.InlineKeyboardButton("💬 Support", url="https://t.me/your_support_channel"))
     bot.reply_to(msg, "🤖 Ultra-Pro AI Bot v3 ready!\nUse /panel for owner controls.", reply_markup=markup)
@@ -152,14 +227,27 @@ def panel(msg: types.Message):
     if msg.from_user.id != OWNER_ID:
         return bot.reply_to(msg, "❌ Not allowed.")
     markup = owner_panel_markup()
+    # add broadcast & admin controls to owner panel
     markup.add(types.InlineKeyboardButton("⚡ Manage Admins", callback_data="manage_admins"))
     markup.add(types.InlineKeyboardButton("📋 Sticker Grabber", callback_data="sticker_grabber"))
+    markup.add(types.InlineKeyboardButton("📢 Broadcast Manager", callback_data="broadcast_manager"))
     bot.send_message(OWNER_ID, "⚙️ Owner Panel", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: True)
 def cb(call: types.CallbackQuery):
-    if call.from_user.id != OWNER_ID:
-        return bot.answer_callback_query(call.id, "❌ Not allowed")
+    # for most actions allow owner or admins where appropriate
+    data = call.data or ""
+    try:
+        if data.startswith("manage_admins") or data == "sticker_grabber":
+            if call.from_user.id != OWNER_ID:
+                return bot.answer_callback_query(call.id, "❌ Only owner can do this here.")
+        elif data.startswith("broadcast_manager"):
+            # let admins open broadcast menu too (in DM)
+            if not is_admin(call.from_user.id):
+                return bot.answer_callback_query(call.id, "❌ Not allowed.")
+    except Exception:
+        pass
+
     try:
         if call.data == "list_groups":
             groups = db.get_groups()
@@ -169,8 +257,7 @@ def cb(call: types.CallbackQuery):
         elif call.data == "instant_broadcast":
             bot.send_message(OWNER_ID, "🚀 Use /broadcast or /broadcast_media")
         elif call.data == "cancel_schedules":
-            scheduler.cancel_all()
-            db.clear_schedules()
+            scheduler.cancel_all(); db.clear_schedules()
             bot.send_message(OWNER_ID, "✅ All schedules cleared.")
         elif call.data == "help":
             bot.send_message(OWNER_ID, "ℹ️ Help: Use /broadcast, /schedule, /panel for controls.")
@@ -178,31 +265,305 @@ def cb(call: types.CallbackQuery):
             g = len(db.get_groups()); u = db.count_users(); s = len(db.list_schedules())
             bot.send_message(OWNER_ID, f"📊 Stats\nGroups:{g}\nUsers:{u}\nSchedules:{s}")
         elif call.data == "manage_admins":
-            try:
-                admins = bot.get_chat_administrators(call.message.chat.id)
-                admin_list = "\n".join([f"👤 {a.user.first_name}" for a in admins])
-                bot.send_message(OWNER_ID, f"⚡ Current Admins:\n{admin_list}")
-            except Exception as e:
-                bot.send_message(OWNER_ID, f"⚠️ Failed to fetch admins: {e}")
+            # owner-only panel: list current admins
+            admin_list = "\n".join([f"👤 {uid}" for uid in sorted(ADMINS)])
+            bot.send_message(OWNER_ID, f"⚡ Current Admins:\n{admin_list}")
         elif call.data == "sticker_grabber":
             bot.send_message(OWNER_ID, "🖼️ Reply to any sticker with /grabsticker to fetch its file_id.")
+        elif call.data == "broadcast_manager":
+            # open broadcast menu in DM for the caller
+            show_broadcast_menu(call.from_user.id)
+        elif call.data.startswith("bc_"):
+            # routed to broadcast callback handler defined below
+            pass
+        # acknowledge callback
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
     except Exception as e:
         logger.error("Callback handler error: %s", e)
-        bot.answer_callback_query(call.id, "⚠️ Error processing action.")
+        try:
+            bot.answer_callback_query(call.id, "⚠️ Error processing action.")
+        except Exception:
+            pass
+
+# =============== Admin commands (owner) ==================
+@bot.message_handler(commands=["addadmin"])
+def add_admin(msg: types.Message):
+    # Owner only
+    if msg.from_user.id != OWNER_ID:
+        return bot.reply_to(msg, "❌ Only Owner can add admins.")
+    try:
+        # If reply to a user: use that user's id
+        if msg.reply_to_message and msg.reply_to_message.from_user:
+            uid = msg.reply_to_message.from_user.id
+        else:
+            args = msg.text.split()
+            if len(args) < 2:
+                return bot.reply_to(msg, "Usage: /addadmin <user_id> OR reply to user's message with /addadmin")
+            uid = int(args[1])
+        ADMINS.add(uid)
+        save_admins(ADMINS)
+        bot.reply_to(msg, f"✅ User {uid} added as Admin.")
+    except Exception as e:
+        logger.error("addadmin error: %s", e)
+        bot.reply_to(msg, f"⚠️ Failed to add admin: {e}")
+
+@bot.message_handler(commands=["removeadmin"])
+def remove_admin(msg: types.Message):
+    if msg.from_user.id != OWNER_ID:
+        return bot.reply_to(msg, "❌ Only Owner can remove admins.")
+    try:
+        args = msg.text.split()
+        if len(args) < 2:
+            return bot.reply_to(msg, "Usage: /removeadmin <user_id>")
+        uid = int(args[1])
+        if uid in ADMINS:
+            ADMINS.discard(uid)
+            save_admins(ADMINS)
+            bot.reply_to(msg, f"✅ User {uid} removed from Admins.")
+        else:
+            bot.reply_to(msg, f"⚠️ User {uid} is not an Admin.")
+    except Exception as e:
+        logger.error("removeadmin error: %s", e)
+        bot.reply_to(msg, f"⚠️ Failed: {e}")
+
+@bot.message_handler(commands=["listadmins"])
+def list_admins(msg: types.Message):
+    if not is_admin(msg.from_user.id):
+        return bot.reply_to(msg, "❌ Not allowed.")
+    admin_list = "\n".join([str(uid) for uid in sorted(ADMINS)])
+    bot.reply_to(msg, f"👑 Current Admins:\n{admin_list}")
+
+# =============== BROADCAST MANAGER (inline + DM wizard) ==================
+# sessions: user_id -> dict with state + fields
+broadcast_sessions = {}
+
+def show_broadcast_menu(chat_id):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📝 Text Broadcast", callback_data="bc_text"))
+    markup.add(types.InlineKeyboardButton("🖼️ Media + Button", callback_data="bc_media"))
+    markup.add(types.InlineKeyboardButton("⏰ Schedule Broadcast", callback_data="bc_schedule"))
+    bot.send_message(chat_id, "📢 Broadcast Manager:\nChoose an option ↓", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("bc_"))
+def broadcast_cb(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    if not is_admin(user_id):
+        return bot.answer_callback_query(call.id, "❌ Not allowed.")
+    data = call.data
+    # make sure further conversation happens in private chat (DM)
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+    if data == "bc_text":
+        broadcast_sessions[user_id] = {"state": "await_text"}
+        bot.send_message(user_id, "✍️ Send the TEXT you want to broadcast to all groups. Send /cancel to abort.")
+    elif data == "bc_media":
+        broadcast_sessions[user_id] = {"state": "await_media_upload"}
+        bot.send_message(user_id, "📸 Please send the IMAGE or VIDEO you want to broadcast (directly in this chat). Send /cancel to abort.")
+    elif data == "bc_schedule":
+        bot.send_message(user_id, "⏰ Scheduling from DM is not implemented in wizard. Use /schedule in owner panel or direct commands.")
+    else:
+        bot.send_message(user_id, "⚠️ Unknown broadcast option.")
+
+@bot.message_handler(commands=["broadcast_menu"])
+def cmd_broadcast_menu(msg: types.Message):
+    if not is_admin(msg.from_user.id):
+        return bot.reply_to(msg, "❌ Not allowed.")
+    show_broadcast_menu(msg.from_user.id)
+
+@bot.message_handler(commands=["cancel"])
+def cmd_cancel(msg: types.Message):
+    uid = msg.from_user.id
+    if uid in broadcast_sessions:
+        broadcast_sessions.pop(uid, None)
+        bot.reply_to(msg, "❌ Broadcast wizard cancelled.")
+    else:
+        bot.reply_to(msg, "Nothing to cancel.")
+
+# Handler for private incoming media when in broadcast session
+@bot.message_handler(func=lambda m: m.chat.type == "private" and m.from_user and m.from_user.id in broadcast_sessions, content_types=["photo", "video"])
+def _broadcast_receive_media(msg: types.Message):
+    uid = msg.from_user.id
+    sess = broadcast_sessions.get(uid)
+    if not sess:
+        return
+    if sess.get("state") != "await_media_upload":
+        # ignore media in other states
+        return
+    try:
+        # store media
+        if msg.photo:
+            sess["media_type"] = "photo"
+            sess["media_file_id"] = msg.photo[-1].file_id
+        elif msg.video:
+            sess["media_type"] = "video"
+            sess["media_file_id"] = msg.video.file_id
+        else:
+            return bot.reply_to(msg, "Unsupported media. Send a photo or video.")
+        sess["state"] = "await_link"
+        bot.send_message(uid, "🔗 Now send the LINK (URL) that the button should open (e.g. https://t.me/yourchannel).")
+    except Exception as e:
+        logger.error("broadcast media receive error: %s", e)
+        bot.reply_to(msg, "⚠️ Error receiving media.")
+
+# Handler for private text steps in broadcast wizard
+@bot.message_handler(func=lambda m: m.chat.type == "private" and m.from_user and m.from_user.id in broadcast_sessions, content_types=["text"])
+def _broadcast_wizard_text(msg: types.Message):
+    uid = msg.from_user.id
+    text = (msg.text or "").strip()
+    sess = broadcast_sessions.get(uid)
+    if not sess:
+        return
+    state = sess.get("state")
+
+    # Cancel shortcut
+    if text.lower() in ("/cancel", "cancel"):
+        broadcast_sessions.pop(uid, None)
+        return bot.reply_to(msg, "❌ Broadcast wizard cancelled.")
+
+    try:
+        if state == "await_text":
+            # Received text to broadcast -> preview -> confirm
+            sess["broadcast_text"] = text
+            sess["state"] = "await_confirm_text"
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("✅ Confirm & Send", callback_data=f"bc_confirm_text:{uid}"))
+            markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data=f"bc_cancel:{uid}"))
+            bot.send_message(uid, "📣 Preview of your broadcast text:\n\n" + text, reply_markup=markup)
+            return
+
+        if state == "await_link":
+            # store link then ask for button text
+            sess["link"] = text
+            sess["state"] = "await_btn_text"
+            bot.send_message(uid, "🔘 Send the BUTTON TEXT (e.g. Join Channel)")
+            return
+
+        if state == "await_btn_text":
+            sess["button_text"] = text
+            sess["state"] = "await_caption"
+            bot.send_message(uid, "📝 Send the CAPTION for the media (or send /skip to leave empty).")
+            return
+
+        if state == "await_caption":
+            if text.lower() == "/skip":
+                sess["caption"] = ""
+            else:
+                sess["caption"] = text
+            # show preview: send media back with button
+            sess["state"] = "await_confirm_media"
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(sess.get("button_text", "Open"), url=sess.get("link")))
+            # send preview
+            if sess.get("media_type") == "photo":
+                bot.send_photo(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup)
+            elif sess.get("media_type") == "video":
+                bot.send_video(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup)
+            # show confirm/cancel
+            confirm_markup = types.InlineKeyboardMarkup()
+            confirm_markup.add(types.InlineKeyboardButton("✅ Confirm & Send", callback_data=f"bc_confirm_media:{uid}"))
+            confirm_markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data=f"bc_cancel:{uid}"))
+            bot.send_message(uid, "Preview above. Confirm to broadcast to all groups where the bot is present.", reply_markup=confirm_markup)
+            return
+
+        # other states -> ignore or inform
+    except Exception as e:
+        logger.exception("broadcast wizard text handler error:")
+        bot.reply_to(msg, "⚠️ Error during broadcast wizard.")
+
+# Callback handlers for confirm/cancel
+@bot.callback_query_handler(func=lambda c: c.data and (c.data.startswith("bc_confirm_") or c.data.startswith("bc_cancel:") ))
+def _broadcast_confirm_cancel(call: types.CallbackQuery):
+    data = call.data or ""
+    try:
+        # pattern bc_confirm_text:<uid>, bc_confirm_media:<uid>, bc_cancel:<uid>
+        if data.startswith("bc_cancel:"):
+            parts = data.split(":", 1)
+            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
+            if call.from_user.id != uid:
+                return bot.answer_callback_query(call.id, "❌ Not allowed.")
+            broadcast_sessions.pop(uid, None)
+            bot.answer_callback_query(call.id)
+            return bot.send_message(uid, "✅ Broadcast cancelled.")
+        if data.startswith("bc_confirm_text:"):
+            parts = data.split(":", 1)
+            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
+            if call.from_user.id != uid and not is_admin(call.from_user.id):
+                return bot.answer_callback_query(call.id, "❌ Not allowed.")
+            sess = broadcast_sessions.get(uid)
+            if not sess or "broadcast_text" not in sess:
+                bot.answer_callback_query(call.id, "⚠️ No text to send.")
+                return
+            text = sess["broadcast_text"]
+            bot.answer_callback_query(call.id, "Sending broadcast...")
+            groups = db.get_groups()
+            for gid in groups:
+                try:
+                    bot.send_message(gid, text)
+                    time.sleep(0.05)
+                except Exception as e:
+                    logger.warning("Broadcast text failed to %s: %s", gid, e)
+            broadcast_sessions.pop(uid, None)
+            bot.send_message(uid, f"✅ Broadcast text sent to {len(groups)} groups.")
+            return
+
+        if data.startswith("bc_confirm_media:"):
+            parts = data.split(":", 1)
+            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
+            if call.from_user.id != uid and not is_admin(call.from_user.id):
+                return bot.answer_callback_query(call.id, "❌ Not allowed.")
+            sess = broadcast_sessions.get(uid)
+            if not sess or "media_file_id" not in sess:
+                bot.answer_callback_query(call.id, "⚠️ No media to send.")
+                return
+            media_type = sess.get("media_type")
+            file_id = sess.get("media_file_id")
+            caption = sess.get("caption", "")
+            link = sess.get("link")
+            btn_text = sess.get("button_text", "Open")
+            markup = types.InlineKeyboardMarkup()
+            if link:
+                markup.add(types.InlineKeyboardButton(btn_text, url=link))
+            bot.answer_callback_query(call.id, "Sending broadcast...")
+            groups = db.get_groups()
+            for gid in groups:
+                try:
+                    if media_type == "photo":
+                        bot.send_photo(gid, file_id, caption=caption or "", reply_markup=markup)
+                    elif media_type == "video":
+                        bot.send_video(gid, file_id, caption=caption or "", reply_markup=markup)
+                    time.sleep(0.08)
+                except Exception as e:
+                    logger.warning("Broadcast media failed to %s: %s", gid, e)
+            broadcast_sessions.pop(uid, None)
+            bot.send_message(uid, f"✅ Broadcast media sent to {len(groups)} groups.")
+            return
+    except Exception as e:
+        logger.exception("broadcast confirm handler error:")
+        try:
+            bot.answer_callback_query(call.id, "⚠️ Error processing broadcast.")
+        except Exception:
+            pass
 
 # =============== STICKER GRABBER ==================
 @bot.message_handler(commands=["grabsticker"])
 def grab_sticker(msg: types.Message):
-    if msg.from_user.id != OWNER_ID:
+    if not is_admin(msg.from_user.id):
         return bot.reply_to(msg, "❌ Not allowed.")
     if not msg.reply_to_message or not msg.reply_to_message.sticker:
         return bot.reply_to(msg, "⚠️ Reply to a sticker with this command to grab its file_id.")
     sticker_id = msg.reply_to_message.sticker.file_id
     bot.reply_to(msg, f"✅ Sticker file_id:\n<code>{sticker_id}</code>", parse_mode="HTML")
 
-# =============== AI CHAT ==================
+# =============== AI CHAT (main) ==================
 @bot.message_handler(func=lambda m: True, content_types=["text"])
-def chat(msg):
+def chat(msg: types.Message):
+    # If this is a private admin doing broadcast wizard text steps, the wizard handlers (registered earlier) handle it.
+    # The wizard handlers are also matching private messages and are registered earlier, so they would capture first.
     if not should_reply(msg):
         return
     try:
@@ -214,17 +575,15 @@ def chat(msg):
         mem = db.get_memory(uid, limit=6)
         if not ai:
             return bot.send_message(msg.chat.id, "⚠️ AI not configured.")
+        # persona prompt: Butki (female friendly funny)
         try:
             reply = ai.chat_reply(
-    f"""
-    Tum ek ladki ho jiska naam 'Butki' hai 💖
-    Tumhari personality funny, thodi naughty aur friendly hai 😘
-    Har reply me thoda hasi-mazaak, emojis aur ladki wali style ho 💅
-    Ab is user ke message ka jawab do, aur tone casual aur dostana rakho:
-    User: {msg.text}
-    """,
-    mem
-)
+                f"Tum ek ladki ho jiska naam 'Butki' hai 💖\n"
+                f"Tumhari personality funny, thodi naughty aur friendly hai 😘\n"
+                f"Har reply me emojis aur ladki wali style ho 💅\n"
+                f"User: {msg.text}",
+                mem
+            )
         except Exception as e:
             logger.error(f"AI error: {e}")
             reply = "⚠️ Sorry, abhi thoda busy hoon 💖"
@@ -236,11 +595,11 @@ def chat(msg):
 
 # =============== STICKERS ==================
 STICKER_IDS = [
+    # Keep your sticker ids (all provided ones)
     "CAACAgUAAxkBAAMsaM0_Bknmh1kNnNzEH8GpllJ3HIUAAhsRAAJV8BFUGQQlAfumZL02BA",
     "CAACAgEAAxkBAAMoaM03EtaeDFGFrsRC0MDNSM8LgbIAAu4AAyAK8EYrQPDMf_R-rDYE",
     "CAACAgUAAxkBAAMmaM03DTk-hY3KvaMEPcsK548XFvsAApAUAALFL-BVvNXMv2XTJPg2BA",
     "CAACAgUAAyEFAAStbkSDAAIBzmjNJBx_mcgcx3KBYU1O9dpWegpPAAI7FQACbMwgVFrPF5hMaq5UNgQ",
-    "CAACAgUAAxkBAANNaM1VMX0VXi_2ql897hzgwKnlkGQAAjsOAAIKCDlW81YQdhOWt402BA",
     "CAACAgUAAxkBAANNaM1VMX0VXi_2ql897hzgwKnlkGQAAjsOAAIKCDlW81YQdhOWt402BA",
 ]
 
@@ -249,7 +608,7 @@ def sticker(msg: types.Message):
     emoji = msg.sticker.emoji if msg.sticker else "🙂"
     try:
         if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.5:
-            prompt = f"Ek ladki Butki ki tarah roleplay karo. User ne {emoji} sticker bheja hai."
+            prompt = f"Butki style me reply karo. User ne {emoji} sticker bheja hai."
             reply = ai.chat_reply(prompt)
             bot.reply_to(msg, reply)
         else:
