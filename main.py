@@ -215,7 +215,16 @@ def chat(msg):
         if not ai:
             return bot.send_message(msg.chat.id, "⚠️ AI not configured.")
         try:
-            reply = ai.chat_reply(f"As a friendly girl named Butki, reply playfully: {msg.text}", mem)
+            reply = ai.chat_reply(
+    f"""
+    Tum ek ladki ho jiska naam 'Butki' hai 💖
+    Tumhari personality funny, thodi naughty aur friendly hai 😘
+    Har reply me thoda hasi-mazaak, emojis aur ladki wali style ho 💅
+    Ab is user ke message ka jawab do, aur tone casual aur dostana rakho:
+    User: {msg.text}
+    """,
+    mem
+)
         except Exception as e:
             logger.error(f"AI error: {e}")
             reply = "⚠️ Sorry, abhi thoda busy hoon 💖"
