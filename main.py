@@ -172,10 +172,17 @@ def should_reply(msg: types.Message) -> bool:
 
     for ent in entities:
         try:
+            # there are 'mention' and 'text_mention' entity types
             if ent.type == "mention":
                 mention = text[ent.offset:ent.offset + ent.length].lower()
                 mentioned_someone = True
                 if bot_username and bot_username in mention:
+                    mentioned_bot = True
+            elif ent.type == "text_mention":
+                # text_mention has a user attached (no @username) — this is a mention of a user
+                mentioned_someone = True
+                # if the user id equals bot id, it's a mention to bot
+                if ent.user and bot_id and ent.user.id == bot_id:
                     mentioned_bot = True
         except Exception:
             continue
@@ -365,7 +372,9 @@ def broadcast_cb(call: types.CallbackQuery):
         broadcast_sessions[user_id] = {"state": "await_media_upload"}
         bot.send_message(user_id, "📸 Please send the IMAGE or VIDEO you want to broadcast (directly in this chat). Send /cancel to abort.")
     elif data == "bc_schedule":
-        bot.send_message(user_id, "⏰ Scheduling from DM is not implemented in wizard. Use /schedule in owner panel or direct commands.")
+        # start scheduling wizard
+        broadcast_sessions[user_id] = {"state": "await_schedule_type"}
+        bot.send_message(user_id, "⏰ Schedule Broadcast Wizard:\nType 'text' or 'media' — which do you want to schedule?")
     else:
         bot.send_message(user_id, "⚠️ Unknown broadcast option.")
 
@@ -391,21 +400,35 @@ def _broadcast_receive_media(msg: types.Message):
     sess = broadcast_sessions.get(uid)
     if not sess:
         return
-    if sess.get("state") != "await_media_upload":
-        # ignore media in other states
-        return
+    state = sess.get("state")
     try:
-        # store media
-        if msg.photo:
-            sess["media_type"] = "photo"
-            sess["media_file_id"] = msg.photo[-1].file_id
-        elif msg.video:
-            sess["media_type"] = "video"
-            sess["media_file_id"] = msg.video.file_id
-        else:
-            return bot.reply_to(msg, "Unsupported media. Send a photo or video.")
-        sess["state"] = "await_link"
-        bot.send_message(uid, "🔗 Now send the LINK (URL) that the button should open (e.g. https://t.me/yourchannel).")
+        if state == "await_media_upload":
+            # immediate broadcast media flow
+            if msg.photo:
+                sess["media_type"] = "photo"
+                sess["media_file_id"] = msg.photo[-1].file_id
+            elif msg.video:
+                sess["media_type"] = "video"
+                sess["media_file_id"] = msg.video.file_id
+            else:
+                return bot.reply_to(msg, "Unsupported media. Send a photo or video.")
+            sess["state"] = "await_link"
+            bot.send_message(uid, "🔗 Now send the LINK (URL) that the button should open (or /skip to send media without button).")
+            return
+
+        if state == "await_schedule_media_upload":
+            # schedule media flow
+            if msg.photo:
+                sess["media_type"] = "photo"
+                sess["media_file_id"] = msg.photo[-1].file_id
+            elif msg.video:
+                sess["media_type"] = "video"
+                sess["media_file_id"] = msg.video.file_id
+            else:
+                return bot.reply_to(msg, "Unsupported media. Send a photo or video.")
+            sess["state"] = "await_schedule_link"
+            bot.send_message(uid, "🔗 Now send the LINK (URL) for the button (or /skip).")
+            return
     except Exception as e:
         logger.error("broadcast media receive error: %s", e)
         bot.reply_to(msg, "⚠️ Error receiving media.")
@@ -426,8 +449,8 @@ def _broadcast_wizard_text(msg: types.Message):
         return bot.reply_to(msg, "❌ Broadcast wizard cancelled.")
 
     try:
+        # ---------- immediate text broadcast ----------
         if state == "await_text":
-            # Received text to broadcast -> preview -> confirm
             sess["broadcast_text"] = text
             sess["state"] = "await_confirm_text"
             markup = types.InlineKeyboardMarkup()
@@ -436,17 +459,25 @@ def _broadcast_wizard_text(msg: types.Message):
             bot.send_message(uid, "📣 Preview of your broadcast text:\n\n" + text, reply_markup=markup)
             return
 
+        # ---------- immediate media flow: link/button text ----------
         if state == "await_link":
-            # store link then ask for button text
+            if text.lower() == "/skip":
+                sess["link"] = None
+                sess["state"] = "await_caption"
+                bot.send_message(uid, "📝 Send the CAPTION for the media (or /skip for no caption).")
+                return
             sess["link"] = text
             sess["state"] = "await_btn_text"
-            bot.send_message(uid, "🔘 Send the BUTTON TEXT (e.g. Join Channel)")
+            bot.send_message(uid, "🔘 Send the BUTTON TEXT (e.g. Join Channel) or /skip to use default.")
             return
 
         if state == "await_btn_text":
-            sess["button_text"] = text
+            if text.lower() == "/skip":
+                sess["button_text"] = "Open"
+            else:
+                sess["button_text"] = text
             sess["state"] = "await_caption"
-            bot.send_message(uid, "📝 Send the CAPTION for the media (or send /skip to leave empty).")
+            bot.send_message(uid, "📝 Send the CAPTION for the media (or /skip for no caption).")
             return
 
         if state == "await_caption":
@@ -457,12 +488,13 @@ def _broadcast_wizard_text(msg: types.Message):
             # show preview: send media back with button
             sess["state"] = "await_confirm_media"
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton(sess.get("button_text", "Open"), url=sess.get("link")))
+            if sess.get("link"):
+                markup.add(types.InlineKeyboardButton(sess.get("button_text", "Open"), url=sess.get("link")))
             # send preview
             if sess.get("media_type") == "photo":
-                bot.send_photo(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup)
+                bot.send_photo(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup if markup.inline_keyboard else None)
             elif sess.get("media_type") == "video":
-                bot.send_video(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup)
+                bot.send_video(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup if markup.inline_keyboard else None)
             # show confirm/cancel
             confirm_markup = types.InlineKeyboardMarkup()
             confirm_markup.add(types.InlineKeyboardButton("✅ Confirm & Send", callback_data=f"bc_confirm_media:{uid}"))
@@ -470,7 +502,98 @@ def _broadcast_wizard_text(msg: types.Message):
             bot.send_message(uid, "Preview above. Confirm to broadcast to all groups where the bot is present.", reply_markup=confirm_markup)
             return
 
-        # other states -> ignore or inform
+        # ---------- schedule flow ----------
+        if state == "await_schedule_type":
+            if text.lower() in ("text", "media"):
+                sess["schedule_type"] = text.lower()
+                sess["state"] = "await_schedule_datetime"
+                bot.send_message(uid, "📅 Send SCHEDULE TIME in format: YYYY-MM-DD HH:MM (24h). Example: 2025-09-30 18:30")
+            else:
+                bot.send_message(uid, "Please reply 'text' or 'media' to select schedule type.")
+            return
+
+        if state == "await_schedule_datetime":
+            # Basic validation of format
+            sess["schedule_datetime"] = text
+            sess["state"] = "await_schedule_recur"
+            bot.send_message(uid, "🔁 Recurrence? send one of: none / daily / weekly / monthly")
+            return
+
+        if state == "await_schedule_recur":
+            recur = text.lower()
+            if recur not in ("none", "daily", "weekly", "monthly"):
+                return bot.send_message(uid, "Choose recurrence: none / daily / weekly / monthly")
+            sess["schedule_recur"] = recur
+            # next collect message or media depending on type
+            if sess.get("schedule_type") == "text":
+                sess["state"] = "await_schedule_text"
+                bot.send_message(uid, "✍️ Send the TEXT to schedule.")
+            else:
+                sess["state"] = "await_schedule_media_upload"
+                bot.send_message(uid, "📸 Now send the IMAGE or VIDEO to schedule (in this chat).")
+            return
+
+        if state == "await_schedule_text":
+            # finalize schedule for text
+            payload = text
+            run_time = sess.get("schedule_datetime")
+            recur = sess.get("schedule_recur")
+            # call scheduler.schedule_broadcast(run_time, payload, media, recurrence)
+            try:
+                jobid = scheduler.schedule_broadcast(run_time, payload, None, recur)
+                try:
+                    db.add_schedule(jobid, payload, None, run_time, recur)
+                except Exception:
+                    logger.debug("db.add_schedule failed (maybe db not implemented).")
+                bot.send_message(uid, f"✅ Scheduled text broadcast at {run_time} recur={recur}. jobid={jobid}")
+            except Exception as e:
+                logger.exception("Failed to schedule broadcast:")
+                bot.send_message(uid, f"⚠️ Failed to schedule: {e}")
+            broadcast_sessions.pop(uid, None)
+            return
+
+        if state == "await_schedule_link":
+            if text.lower() == "/skip":
+                sess["schedule_link"] = None
+            else:
+                sess["schedule_link"] = text
+            sess["state"] = "await_schedule_btn_text"
+            bot.send_message(uid, "🔘 Send BUTTON TEXT for scheduled media (or /skip).")
+            return
+
+        if state == "await_schedule_btn_text":
+            if text.lower() == "/skip":
+                sess["schedule_btn_text"] = "Open"
+            else:
+                sess["schedule_btn_text"] = text
+            sess["state"] = "await_schedule_caption"
+            bot.send_message(uid, "📝 Send CAPTION for scheduled media (or /skip).")
+            return
+
+        if state == "await_schedule_caption":
+            if text.lower() == "/skip":
+                sess["schedule_caption"] = ""
+            else:
+                sess["schedule_caption"] = text
+            # finalize schedule for media
+            run_time = sess.get("schedule_datetime")
+            recur = sess.get("schedule_recur")
+            payload = sess.get("schedule_caption", "")
+            media_file_id = sess.get("media_file_id")
+            # store schedule in scheduler
+            try:
+                jobid = scheduler.schedule_broadcast(run_time, payload, media_file_id, recur)
+                try:
+                    db.add_schedule(jobid, payload, media_file_id, run_time, recur)
+                except Exception:
+                    logger.debug("db.add_schedule failed (maybe db not implemented).")
+                bot.send_message(uid, f"✅ Scheduled media broadcast at {run_time} recur={recur}. jobid={jobid}")
+            except Exception as e:
+                logger.exception("Failed to schedule media broadcast:")
+                bot.send_message(uid, f"⚠️ Failed to schedule: {e}")
+            broadcast_sessions.pop(uid, None)
+            return
+
     except Exception as e:
         logger.exception("broadcast wizard text handler error:")
         bot.reply_to(msg, "⚠️ Error during broadcast wizard.")
@@ -501,14 +624,16 @@ def _broadcast_confirm_cancel(call: types.CallbackQuery):
             text = sess["broadcast_text"]
             bot.answer_callback_query(call.id, "Sending broadcast...")
             groups = db.get_groups()
+            sent = 0
             for gid in groups:
                 try:
                     bot.send_message(gid, text)
-                    time.sleep(0.05)
+                    sent += 1
+                    time.sleep(0.06)
                 except Exception as e:
                     logger.warning("Broadcast text failed to %s: %s", gid, e)
             broadcast_sessions.pop(uid, None)
-            bot.send_message(uid, f"✅ Broadcast text sent to {len(groups)} groups.")
+            bot.send_message(uid, f"✅ Broadcast text sent to {sent} groups.")
             return
 
         if data.startswith("bc_confirm_media:"):
@@ -530,17 +655,19 @@ def _broadcast_confirm_cancel(call: types.CallbackQuery):
                 markup.add(types.InlineKeyboardButton(btn_text, url=link))
             bot.answer_callback_query(call.id, "Sending broadcast...")
             groups = db.get_groups()
+            sent = 0
             for gid in groups:
                 try:
                     if media_type == "photo":
-                        bot.send_photo(gid, file_id, caption=caption or "", reply_markup=markup)
+                        bot.send_photo(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
                     elif media_type == "video":
-                        bot.send_video(gid, file_id, caption=caption or "", reply_markup=markup)
-                    time.sleep(0.08)
+                        bot.send_video(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
+                    sent += 1
+                    time.sleep(0.09)
                 except Exception as e:
                     logger.warning("Broadcast media failed to %s: %s", gid, e)
             broadcast_sessions.pop(uid, None)
-            bot.send_message(uid, f"✅ Broadcast media sent to {len(groups)} groups.")
+            bot.send_message(uid, f"✅ Broadcast media sent to {sent} groups.")
             return
     except Exception as e:
         logger.exception("broadcast confirm handler error:")
@@ -563,7 +690,6 @@ def grab_sticker(msg: types.Message):
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def chat(msg: types.Message):
     # If this is a private admin doing broadcast wizard text steps, the wizard handlers (registered earlier) handle it.
-    # The wizard handlers are also matching private messages and are registered earlier, so they would capture first.
     if not should_reply(msg):
         return
     try:
@@ -647,6 +773,39 @@ def goodbye(msg: types.Message):
         bot.send_message(msg.chat.id, text)
     except Exception as e:
         logger.error(f"Goodbye error: {e}")
+
+# =============== SCHEDULE COMMAND (owner) ==================
+@bot.message_handler(commands=["schedule"])
+def schedule(msg):
+    if msg.from_user.id != OWNER_ID:
+        return
+    parts = msg.text.split(" ", 4)
+    if len(parts) < 4 and not msg.reply_to_message:
+        return bot.reply_to(msg, "Usage: /schedule YYYY-MM-DD HH:MM <recurring> message (or reply to media with caption)")
+    try:
+        _, d, t, r = parts[:4]
+        payload = parts[4] if len(parts) > 4 else ""
+        media = None
+        if msg.reply_to_message:
+            rm = msg.reply_to_message
+            if rm.photo:
+                media = rm.photo[-1].file_id
+            elif rm.video:
+                media = rm.video.file_id
+            elif rm.document:
+                media = rm.document.file_id
+            if not payload:
+                payload = rm.caption or ""
+        run_time = f"{d} {t}"
+        jobid = scheduler.schedule_broadcast(run_time, payload, media, r)
+        try:
+            db.add_schedule(jobid, payload, media, run_time, r)
+        except Exception:
+            logger.debug("db.add_schedule not available or failed.")
+        bot.reply_to(msg, f"✅ Scheduled {run_time} recurring={r} jobid={jobid}")
+    except Exception as e:
+        logger.exception("Schedule command error:")
+        bot.reply_to(msg, f"⚠️ Failed to schedule: {e}")
 
 # =============== RESTORE SCHEDULES ==================
 try:
