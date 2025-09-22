@@ -739,8 +739,11 @@ def sticker(msg: types.Message):
         if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.5:
             prompt = f"Butki style me reply karo. User ne {emoji} sticker bheja hai."
             reply = ai.chat_reply(prompt)
-            if msg.chat.type == "private":
+reply = ai.chat_reply(prompt)
+if msg.chat.type == "private":
     bot.reply_to(msg, reply)
+else:
+    bot.send_message(msg.chat.id, reply)
 else:
     bot.send_message(msg.chat.id, reply)
         else:
