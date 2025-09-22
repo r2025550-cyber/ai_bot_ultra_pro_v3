@@ -1,85 +1,65 @@
-import os
-import logging
 import requests
+import logging
 from io import BytesIO
 
+logger = logging.getLogger(__name__)
+
 class AIHelper:
-    def __init__(self, openai_api_key: str, base_url: str = "https://openrouter.ai/api/v1"):
-        """
-        Helper class for AI text + image generation
-        """
-        self.api_key = openai_api_key
+    def __init__(self, openai_api_key=None, hf_api_key=None, base_url="https://openrouter.ai/api/v1"):
+        self.openai_api_key = openai_api_key
+        self.hf_api_key = hf_api_key
         self.base_url = base_url
-        self.logger = logging.getLogger(__name__)
 
-        # Hugging Face API key (for image generation)
-        self.hf_token = os.getenv("HUGGINGFACE_API_KEY")
-        if not self.hf_token:
-            self.logger.warning("HUGGINGFACE_API_KEY not set. Image generation will not work.")
-
-    # ================= TEXT REPLY (OpenRouter / OpenAI) ==================
-    def chat_reply(self, prompt: str, memory: list = None, model: str = "openai/gpt-3.5-turbo"):
-        """
-        Calls OpenRouter (or OpenAI-compatible) API for text chat completion.
-        :param prompt: User input + persona prompt
-        :param memory: List of dicts [{"role": "user/assistant", "content": "..."}]
-        :param model: Model name (default GPT-3.5-turbo via OpenRouter)
-        """
-        if not self.api_key:
-            raise ValueError("API key not configured for text model")
-
-        url = f"{self.base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}"}
-        messages = []
-
-        # Add history
-        if memory:
-            for m in memory:
-                messages.append({"role": m["role"], "content": m["content"]})
-
-        # Add new user prompt
-        messages.append({"role": "user", "content": prompt})
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.8,
-            "max_tokens": 500,
-        }
-
+    # ========== TEXT CHAT (OpenRouter) ==========
+    def chat_reply(self, prompt, history=None, model="openai/gpt-3.5-turbo"):
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            url = f"{self.base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.openai_api_key}",
+                "Content-Type": "application/json"
+            }
+
+            # Agar history hai to usko add karo
+            messages = []
+            if history:
+                for h in history:
+                    messages.append({"role": h["role"], "content": h["content"]})
+            messages.append({"role": "user", "content": prompt})
+
+            data = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.8,
+                "max_tokens": 500
+            }
+
+            resp = requests.post(url, headers=headers, json=data, timeout=30)
             resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            j = resp.json()
+            return j["choices"][0]["message"]["content"]
+
         except Exception as e:
-            self.logger.error(f"Text generation error: {e}")
-            return "⚠️ Sorry, abhi reply nahi de pa rahi 💖"
+            logger.error(f"OpenRouter error: {e}")
+            return "⚠️ Sorry, AI se baat nahi ho paayi."
 
-    # ================= IMAGE GENERATION (Hugging Face) ==================
-    def generate_image(self, prompt: str, model: str = "runwayml/stable-diffusion-v1-5"):
-        """
-        Calls Hugging Face Inference API for Stable Diffusion models.
-        Returns a BytesIO image or None if failed.
-        """
-        if not self.hf_token:
-            self.logger.error("HUGGINGFACE_API_KEY not configured")
-            return None
-
-        url = f"https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0"
-        headers = {"Authorization": f"Bearer {self.hf_token}"}
-        payload = {
-            "inputs": prompt,
-            "options": {"wait_for_model": True}
-        }
+    # ========== IMAGE GENERATION (HuggingFace) ==========
+    def generate_image(self, prompt, model="stabilityai/stable-diffusion-xl-base-1.0"):
+        if not self.hf_api_key:
+            return None, "⚠️ HuggingFace API key missing."
 
         try:
+            url = f"https://api-inference.huggingface.co/models/{model}"
+            headers = {"Authorization": f"Bearer {self.hf_api_key}"}
+            payload = {"inputs": prompt}
+
             resp = requests.post(url, headers=headers, json=payload, timeout=60)
+
             if resp.status_code == 200:
-                return BytesIO(resp.content)
+                return BytesIO(resp.content), None   # ab bot.send_photo ke liye ready hai
             else:
-                self.logger.error("HF error %s: %s", resp.status_code, resp.text)
-                return None
+                logger.error(f"HF error {resp.status_code}: {resp.text}")
+                return None, f"⚠️ HF error: {resp.status_code}"
+
         except Exception as e:
-            self.logger.error("HF request failed: %s", e)
-            return None
+            logger.error(f"HF error: {e}")
+            return None, f"⚠️ HF exception: {e}"
