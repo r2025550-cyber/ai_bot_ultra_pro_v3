@@ -706,8 +706,8 @@ def chat(msg: types.Message):
             reply = ai.chat_reply(
                 f"Tum ek ladki ho jiska naam 'Butki' hai 💖\n"
                 f"Tumhari personality funny, thodi naughty aur friendly hai 😘\n"
-                f"Har reply roleplay style me ho 💅\n"
-                f"Group me ho to sabko casual dosti wali ladki ki tarah jawab do 🥳✨\n"
+                f"Roleplay style me har reply do, emojis ke sath 💅✨\n"
+                f"Group me sabko apna dost samjho 🥳 aur mazaak karo.\n"
                 f"User: {msg.text}",
                 mem
             )
@@ -717,7 +717,7 @@ def chat(msg: types.Message):
 
         db.add_memory(uid, "assistant", reply)
 
-        # Natural reply everywhere with safe fallback
+        # Try natural reply everywhere
         try:
             bot.reply_to(msg, reply)
         except Exception as e:
@@ -743,14 +743,13 @@ def sticker(msg: types.Message):
     emoji = msg.sticker.emoji if msg.sticker else "🙂"
     try:
         if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.5:
-            prompt = f"Butki style me roleplay reply karo. User ne {emoji} sticker bheja hai."
+            prompt = f"Butki style roleplay reply karo. User ne {emoji} sticker bheja hai."
             try:
                 reply = ai.chat_reply(prompt)
             except Exception as e:
                 logger.error(f"AI error (sticker): {e}")
                 reply = f"{emoji} Sorry, abhi thoda busy hoon 💖"
 
-            # Natural reply everywhere with safe fallback
             try:
                 bot.reply_to(msg, reply)
             except Exception as e:
