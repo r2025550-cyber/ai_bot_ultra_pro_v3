@@ -69,10 +69,7 @@ db = Database(os.path.join(DATA_DIR, "memory.db"))
 ai = None
 if OPENAI_API_KEY:
     try:
-        ai = AIHelper(
-    openai_api_key=OPENAI_API_KEY,
-    base_url="https://openrouter.ai/api/v1"
-)
+        ai = AIHelper(openai_api_key=OPENAI_API_KEY)
         logger.info("AI helper initialized.")
     except Exception as e:
         ai = None
