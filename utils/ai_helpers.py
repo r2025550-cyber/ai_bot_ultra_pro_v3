@@ -1,70 +1,85 @@
+import os
 import logging
 import requests
+from io import BytesIO
 
 class AIHelper:
     def __init__(self, openai_api_key: str, base_url: str = "https://openrouter.ai/api/v1"):
+        """
+        Helper class for AI text + image generation
+        """
         self.api_key = openai_api_key
         self.base_url = base_url
         self.logger = logging.getLogger(__name__)
 
-    def chat_reply(self, prompt: str, memory: list = None) -> str:
-        """
-        Generate a roleplay chat reply using memory + persona.
-        memory = list of dicts like: [{"role":"user","content":"..."}, {"role":"assistant","content":"..."}]
-        """
-        if memory is None:
-            memory = []
+        # Hugging Face API key (for image generation)
+        self.hf_token = os.getenv("HUGGINGFACE_API_KEY")
+        if not self.hf_token:
+            self.logger.warning("HUGGINGFACE_API_KEY not set. Image generation will not work.")
 
-        # Persona (always injected)
-        persona = {
-            "role": "system",
-            "content": (
-                "Tum ek ladki ho jiska naam 'Butki' hai 💖\n"
-                "Butki funny, thodi naughty aur friendly hai 😘\n"
-                "Har reply roleplay style me ho, emojis ke sath 💅✨\n"
-                "Group me sabko apna dost samjho 🥳 aur mazaak karte hue baat karo.\n"
-                "Private chat me thoda cute aur close behave karo 💕\n"
-                "Hamesha ladki wali style, emojis, aur thoda masti bhara tone rakho 💖\n"
-            )
-        }
+    # ================= TEXT REPLY (OpenRouter / OpenAI) ==================
+    def chat_reply(self, prompt: str, memory: list = None, model: str = "openai/gpt-3.5-turbo"):
+        """
+        Calls OpenRouter (or OpenAI-compatible) API for text chat completion.
+        :param prompt: User input + persona prompt
+        :param memory: List of dicts [{"role": "user/assistant", "content": "..."}]
+        :param model: Model name (default GPT-3.5-turbo via OpenRouter)
+        """
+        if not self.api_key:
+            raise ValueError("API key not configured for text model")
 
-        # Combine persona + memory + new prompt
-        messages = [persona]
-        for m in memory:
-            if isinstance(m, dict) and "role" in m and "content" in m:
-                messages.append(m)
+        url = f"{self.base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        messages = []
+
+        # Add history
+        if memory:
+            for m in memory:
+                messages.append({"role": m["role"], "content": m["content"]})
+
+        # Add new user prompt
         messages.append({"role": "user", "content": prompt})
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": "https://t.me/ButkiBot",
-            "X-Title": "Butki AI Bot"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.8,
+            "max_tokens": 500,
         }
 
-        # Models to try in order
-        models = ["openai/gpt-4o-mini", "anthropic/claude-3-haiku"]
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            self.logger.error(f"Text generation error: {e}")
+            return "⚠️ Sorry, abhi reply nahi de pa rahi 💖"
 
-        for model in models:
-            try:
-                response = requests.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": 0.9
-                    },
-                    timeout=30
-                )
+    # ================= IMAGE GENERATION (Hugging Face) ==================
+    def generate_image(self, prompt: str, model: str = "runwayml/stable-diffusion-v1-5"):
+        """
+        Calls Hugging Face Inference API for Stable Diffusion models.
+        Returns a BytesIO image or None if failed.
+        """
+        if not self.hf_token:
+            self.logger.error("HUGGINGFACE_API_KEY not configured")
+            return None
 
-                if response.status_code == 200:
-                    data = response.json()
-                    return data["choices"][0]["message"]["content"].strip()
-                else:
-                    self.logger.error(f"AI API Error ({model}): {response.status_code} {response.text}")
+        url = f"https://api-inference.huggingface.co/models/{model}"
+        headers = {"Authorization": f"Bearer {self.hf_token}"}
+        payload = {
+            "inputs": prompt,
+            "options": {"wait_for_model": True}
+        }
 
-            except Exception as e:
-                self.logger.error(f"AI request failed ({model}): {e}")
-
-        # If all models fail
-        return "⚠️ Sorry, abhi thoda busy hoon 💖"
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            if resp.status_code == 200:
+                return BytesIO(resp.content)
+            else:
+                self.logger.error("HF error %s: %s", resp.status_code, resp.text)
+                return None
+        except Exception as e:
+            self.logger.error("HF request failed: %s", e)
+            return None
