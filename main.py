@@ -12,7 +12,6 @@ import time
 import random
 from typing import Optional
 from telebot import TeleBot, types
-import telebot.apihelper as tb_apihelper  # for catching ApiTelegramException
 from utils.ai_helpers import AIHelper
 from utils.db import Database
 from utils.scheduler import SchedulerManager
@@ -206,70 +205,10 @@ def should_reply(msg: types.Message) -> bool:
 
     return False
 
-# --------------------------
-# Safe send wrappers
-# --------------------------
-def safe_send_message(chat_id, text, **kwargs):
-    """Send message safely; return True if successful, False otherwise."""
-    try:
-        bot.send_message(chat_id, text, **kwargs)
-        return True
-    except tb_apihelper.ApiTelegramException as e:
-        # known Telegram API problem (like rights/blocked/chat not found)
-        logger.warning("safe_send_message failed chat=%s error=%s", chat_id, e)
-        return False
-    except Exception as e:
-        logger.exception("safe_send_message unexpected error chat=%s: %s", chat_id, e)
-        return False
-
-def safe_send_photo(chat_id, photo, caption="", reply_markup=None, **kwargs):
-    try:
-        if reply_markup:
-            bot.send_photo(chat_id, photo, caption=caption or "", reply_markup=reply_markup, **kwargs)
-        else:
-            bot.send_photo(chat_id, photo, caption=caption or "", **kwargs)
-        return True
-    except tb_apihelper.ApiTelegramException as e:
-        logger.warning("safe_send_photo failed chat=%s error=%s", chat_id, e)
-        return False
-    except Exception as e:
-        logger.exception("safe_send_photo unexpected error chat=%s: %s", chat_id, e)
-        return False
-
-def safe_send_video(chat_id, video, caption="", reply_markup=None, **kwargs):
-    try:
-        if reply_markup:
-            bot.send_video(chat_id, video, caption=caption or "", reply_markup=reply_markup, **kwargs)
-        else:
-            bot.send_video(chat_id, video, caption=caption or "", **kwargs)
-        return True
-    except tb_apihelper.ApiTelegramException as e:
-        logger.warning("safe_send_video failed chat=%s error=%s", chat_id, e)
-        return False
-    except Exception as e:
-        logger.exception("safe_send_video unexpected error chat=%s: %s", chat_id, e)
-        return False
-
-def safe_send_sticker(chat_id, sticker_id, reply_to_message_id=None, **kwargs):
-    try:
-        bot.send_sticker(chat_id, sticker_id, reply_to_message_id=reply_to_message_id, **kwargs)
-        return True
-    except tb_apihelper.ApiTelegramException as e:
-        logger.warning("safe_send_sticker failed chat=%s error=%s", chat_id, e)
-        return False
-    except Exception as e:
-        logger.exception("safe_send_sticker unexpected error chat=%s: %s", chat_id, e)
-        return False
-
 # =============== START ==================
 @bot.message_handler(commands=["start"])
 def start(msg: types.Message):
-    try:
-        db.add_group(msg.chat.id)
-    except Exception:
-        # db may be optional; ignore
-        pass
-
+    db.add_group(msg.chat.id)
     markup = types.InlineKeyboardMarkup()
     try:
         bot_me = bot.get_me()
@@ -287,20 +226,43 @@ def start(msg: types.Message):
         types.InlineKeyboardButton("📢 Broadcast Manager", callback_data="broadcast_manager")
     )
     markup.add(types.InlineKeyboardButton("💬 Support", url="https://t.me/your_support_channel"))
-    # use safe send
-    safe_send_message(msg.chat.id, "🤖 Ultra-Pro AI Bot v3 ready!\nUse /panel for owner controls.", reply_markup=markup)
+    bot.reply_to(msg, "🤖 Ultra-Pro AI Bot v3 ready!\nUse /panel for owner controls.", reply_markup=markup)
 
 # =============== OWNER PANEL ==================
 @bot.message_handler(commands=["panel"])
 def panel(msg: types.Message):
     if msg.from_user.id != OWNER_ID:
-        return safe_send_message(msg.chat.id, "❌ Not allowed.")
+        return bot.reply_to(msg, "❌ Not allowed.")
     markup = owner_panel_markup()
     # add broadcast & admin controls to owner panel
     markup.add(types.InlineKeyboardButton("⚡ Manage Admins", callback_data="manage_admins"))
     markup.add(types.InlineKeyboardButton("📋 Sticker Grabber", callback_data="sticker_grabber"))
     markup.add(types.InlineKeyboardButton("📢 Broadcast Manager", callback_data="broadcast_manager"))
-    safe_send_message(OWNER_ID, "⚙️ Owner Panel", reply_markup=markup)
+    bot.send_message(OWNER_ID, "⚙️ Owner Panel", reply_markup=markup)
+
+# =============== BROADCAST CALLBACKS (fix order) ==================
+# pehle broadcast ke liye handler
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("bc_"))
+def broadcast_cb(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    if not is_admin(user_id):
+        return bot.answer_callback_query(call.id, "❌ Not allowed.")
+    data = call.data
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
+    if data == "bc_text":
+        broadcast_sessions[user_id] = {"state": "await_text"}
+        bot.send_message(user_id, "✍️ Send the TEXT you want to broadcast to all groups. Send /cancel to abort.")
+    elif data == "bc_media":
+        broadcast_sessions[user_id] = {"state": "await_media_upload"}
+        bot.send_message(user_id, "📸 Please send the IMAGE or VIDEO you want to broadcast (directly in this chat). Send /cancel to abort.")
+    elif data == "bc_schedule":
+        bot.send_message(user_id, "⏰ Scheduling from DM is not implemented in wizard. Use /schedule command.")
+    else:
+        bot.send_message(user_id, "⚠️ Unknown broadcast option.")
 
 # =============== GENERAL CALLBACKS ==================
 @bot.callback_query_handler(func=lambda c: True)
@@ -309,26 +271,27 @@ def cb(call: types.CallbackQuery):
     try:
         if data == "list_groups":
             groups = db.get_groups()
-            safe_send_message(OWNER_ID, "📋 Groups:\n" + ("\n".join(map(str, groups)) if groups else "None"))
+            bot.send_message(OWNER_ID, "📋 Groups:\n" + ("\n".join(map(str, groups)) if groups else "None"))
         elif data == "new_schedule":
-            safe_send_message(OWNER_ID, "📝 Use /schedule YYYY-MM-DD HH:MM <None/daily/weekly/monthly> Message")
+            bot.send_message(OWNER_ID, "📝 Use /schedule YYYY-MM-DD HH:MM <None/daily/weekly/monthly> Message")
         elif data == "instant_broadcast":
-            safe_send_message(OWNER_ID, "🚀 Use /broadcast or /broadcast_media")
+            bot.send_message(OWNER_ID, "🚀 Use /broadcast or /broadcast_media")
         elif data == "cancel_schedules":
             scheduler.cancel_all(); db.clear_schedules()
-            safe_send_message(OWNER_ID, "✅ All schedules cleared.")
+            bot.send_message(OWNER_ID, "✅ All schedules cleared.")
         elif data == "help":
-            safe_send_message(OWNER_ID, "ℹ️ Help: Use /broadcast, /schedule, /panel for controls.")
+            bot.send_message(OWNER_ID, "ℹ️ Help: Use /broadcast, /schedule, /panel for controls.")
         elif data == "stats":
             g = len(db.get_groups()); u = db.count_users(); s = len(db.list_schedules())
-            safe_send_message(OWNER_ID, f"📊 Stats\nGroups:{g}\nUsers:{u}\nSchedules:{s}")
+            bot.send_message(OWNER_ID, f"📊 Stats\nGroups:{g}\nUsers:{u}\nSchedules:{s}")
         elif data == "manage_admins":
             admin_list = "\n".join([f"👤 {uid}" for uid in sorted(ADMINS)])
-            safe_send_message(OWNER_ID, f"⚡ Current Admins:\n{admin_list}")
+            bot.send_message(OWNER_ID, f"⚡ Current Admins:\n{admin_list}")
         elif data == "sticker_grabber":
-            safe_send_message(OWNER_ID, "🖼️ Reply to any sticker with /grabsticker to fetch its file_id.")
+            bot.send_message(OWNER_ID, "🖼️ Reply to any sticker with /grabsticker to fetch its file_id.")
         elif data == "broadcast_manager":
             show_broadcast_menu(call.from_user.id)
+        # ❌ NOTE: bc_ yaha handle mat karo, upar hi ho raha hai
         try:
             bot.answer_callback_query(call.id)
         except Exception:
@@ -345,7 +308,7 @@ def cb(call: types.CallbackQuery):
 def add_admin(msg: types.Message):
     # Owner only
     if msg.from_user.id != OWNER_ID:
-        return safe_send_message(msg.chat.id, "❌ Only Owner can add admins.")
+        return bot.reply_to(msg, "❌ Only Owner can add admins.")
     try:
         # If reply to a user: use that user's id
         if msg.reply_to_message and msg.reply_to_message.from_user:
@@ -353,40 +316,40 @@ def add_admin(msg: types.Message):
         else:
             args = msg.text.split()
             if len(args) < 2:
-                return safe_send_message(msg.chat.id, "Usage: /addadmin <user_id> OR reply to user's message with /addadmin")
+                return bot.reply_to(msg, "Usage: /addadmin <user_id> OR reply to user's message with /addadmin")
             uid = int(args[1])
         ADMINS.add(uid)
         save_admins(ADMINS)
-        safe_send_message(msg.chat.id, f"✅ User {uid} added as Admin.")
+        bot.reply_to(msg, f"✅ User {uid} added as Admin.")
     except Exception as e:
         logger.error("addadmin error: %s", e)
-        safe_send_message(msg.chat.id, f"⚠️ Failed to add admin: {e}")
+        bot.reply_to(msg, f"⚠️ Failed to add admin: {e}")
 
 @bot.message_handler(commands=["removeadmin"])
 def remove_admin(msg: types.Message):
     if msg.from_user.id != OWNER_ID:
-        return safe_send_message(msg.chat.id, "❌ Only Owner can remove admins.")
+        return bot.reply_to(msg, "❌ Only Owner can remove admins.")
     try:
         args = msg.text.split()
         if len(args) < 2:
-            return safe_send_message(msg.chat.id, "Usage: /removeadmin <user_id>")
+            return bot.reply_to(msg, "Usage: /removeadmin <user_id>")
         uid = int(args[1])
         if uid in ADMINS:
             ADMINS.discard(uid)
             save_admins(ADMINS)
-            safe_send_message(msg.chat.id, f"✅ User {uid} removed from Admins.")
+            bot.reply_to(msg, f"✅ User {uid} removed from Admins.")
         else:
-            safe_send_message(msg.chat.id, f"⚠️ User {uid} is not an Admin.")
+            bot.reply_to(msg, f"⚠️ User {uid} is not an Admin.")
     except Exception as e:
         logger.error("removeadmin error: %s", e)
-        safe_send_message(msg.chat.id, f"⚠️ Failed: {e}")
+        bot.reply_to(msg, f"⚠️ Failed: {e}")
 
 @bot.message_handler(commands=["listadmins"])
 def list_admins(msg: types.Message):
     if not is_admin(msg.from_user.id):
-        return safe_send_message(msg.chat.id, "❌ Not allowed.")
+        return bot.reply_to(msg, "❌ Not allowed.")
     admin_list = "\n".join([str(uid) for uid in sorted(ADMINS)])
-    safe_send_message(msg.chat.id, f"👑 Current Admins:\n{admin_list}")
+    bot.reply_to(msg, f"👑 Current Admins:\n{admin_list}")
 
 # =============== BROADCAST MANAGER (inline + DM wizard) ==================
 # sessions: user_id -> dict with state + fields
@@ -397,7 +360,7 @@ def show_broadcast_menu(chat_id):
     markup.add(types.InlineKeyboardButton("📝 Text Broadcast", callback_data="bc_text"))
     markup.add(types.InlineKeyboardButton("🖼️ Media + Button", callback_data="bc_media"))
     markup.add(types.InlineKeyboardButton("⏰ Schedule Broadcast", callback_data="bc_schedule"))
-    safe_send_message(chat_id, "📢 Broadcast Manager:\nChoose an option ↓", reply_markup=markup)
+    bot.send_message(chat_id, "📢 Broadcast Manager:\nChoose an option ↓", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("bc_"))
 def broadcast_cb(call: types.CallbackQuery):
@@ -412,21 +375,21 @@ def broadcast_cb(call: types.CallbackQuery):
         pass
     if data == "bc_text":
         broadcast_sessions[user_id] = {"state": "await_text"}
-        safe_send_message(user_id, "✍️ Send the TEXT you want to broadcast to all groups. Send /cancel to abort.")
+        bot.send_message(user_id, "✍️ Send the TEXT you want to broadcast to all groups. Send /cancel to abort.")
     elif data == "bc_media":
         broadcast_sessions[user_id] = {"state": "await_media_upload"}
-        safe_send_message(user_id, "📸 Please send the IMAGE or VIDEO you want to broadcast (directly in this chat). Send /cancel to abort.")
+        bot.send_message(user_id, "📸 Please send the IMAGE or VIDEO you want to broadcast (directly in this chat). Send /cancel to abort.")
     elif data == "bc_schedule":
         # start scheduling wizard
         broadcast_sessions[user_id] = {"state": "await_schedule_type"}
-        safe_send_message(user_id, "⏰ Schedule Broadcast Wizard:\nType 'text' or 'media' — which do you want to schedule?")
+        bot.send_message(user_id, "⏰ Schedule Broadcast Wizard:\nType 'text' or 'media' — which do you want to schedule?")
     else:
-        safe_send_message(user_id, "⚠️ Unknown broadcast option.")
+        bot.send_message(user_id, "⚠️ Unknown broadcast option.")
 
 @bot.message_handler(commands=["broadcast_menu"])
 def cmd_broadcast_menu(msg: types.Message):
     if not is_admin(msg.from_user.id):
-        return safe_send_message(msg.chat.id, "❌ Not allowed.")
+        return bot.reply_to(msg, "❌ Not allowed.")
     show_broadcast_menu(msg.from_user.id)
 
 @bot.message_handler(commands=["cancel"])
@@ -434,9 +397,9 @@ def cmd_cancel(msg: types.Message):
     uid = msg.from_user.id
     if uid in broadcast_sessions:
         broadcast_sessions.pop(uid, None)
-        return safe_send_message(msg.chat.id, "❌ Broadcast wizard cancelled.")
+        bot.reply_to(msg, "❌ Broadcast wizard cancelled.")
     else:
-        return safe_send_message(msg.chat.id, "Nothing to cancel.")
+        bot.reply_to(msg, "Nothing to cancel.")
 
 # Handler for private incoming media when in broadcast session
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.from_user and m.from_user.id in broadcast_sessions, content_types=["photo", "video"])
@@ -456,9 +419,9 @@ def _broadcast_receive_media(msg: types.Message):
                 sess["media_type"] = "video"
                 sess["media_file_id"] = msg.video.file_id
             else:
-                return safe_send_message(uid, "Unsupported media. Send a photo or video.")
+                return bot.reply_to(msg, "Unsupported media. Send a photo or video.")
             sess["state"] = "await_link"
-            safe_send_message(uid, "🔗 Now send the LINK (URL) that the button should open (or /skip to send media without button).")
+            bot.send_message(uid, "🔗 Now send the LINK (URL) that the button should open (or /skip to send media without button).")
             return
 
         if state == "await_schedule_media_upload":
@@ -470,13 +433,13 @@ def _broadcast_receive_media(msg: types.Message):
                 sess["media_type"] = "video"
                 sess["media_file_id"] = msg.video.file_id
             else:
-                return safe_send_message(uid, "Unsupported media. Send a photo or video.")
+                return bot.reply_to(msg, "Unsupported media. Send a photo or video.")
             sess["state"] = "await_schedule_link"
-            safe_send_message(uid, "🔗 Now send the LINK (URL) for the button (or /skip).")
+            bot.send_message(uid, "🔗 Now send the LINK (URL) for the button (or /skip).")
             return
     except Exception as e:
         logger.error("broadcast media receive error: %s", e)
-        safe_send_message(uid, "⚠️ Error receiving media.")
+        bot.reply_to(msg, "⚠️ Error receiving media.")
 
 # Handler for private text steps in broadcast wizard
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.from_user and m.from_user.id in broadcast_sessions, content_types=["text"])
@@ -491,7 +454,7 @@ def _broadcast_wizard_text(msg: types.Message):
     # Cancel shortcut
     if text.lower() in ("/cancel", "cancel"):
         broadcast_sessions.pop(uid, None)
-        return safe_send_message(uid, "❌ Broadcast wizard cancelled.")
+        return bot.reply_to(msg, "❌ Broadcast wizard cancelled.")
 
     try:
         # ---------- immediate text broadcast ----------
@@ -501,7 +464,7 @@ def _broadcast_wizard_text(msg: types.Message):
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("✅ Confirm & Send", callback_data=f"bc_confirm_text:{uid}"))
             markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data=f"bc_cancel:{uid}"))
-            safe_send_message(uid, "📣 Preview of your broadcast text:\n\n" + text, reply_markup=markup)
+            bot.send_message(uid, "📣 Preview of your broadcast text:\n\n" + text, reply_markup=markup)
             return
 
         # ---------- immediate media flow: link/button text ----------
@@ -509,11 +472,11 @@ def _broadcast_wizard_text(msg: types.Message):
             if text.lower() == "/skip":
                 sess["link"] = None
                 sess["state"] = "await_caption"
-                safe_send_message(uid, "📝 Send the CAPTION for the media (or /skip for no caption).")
+                bot.send_message(uid, "📝 Send the CAPTION for the media (or /skip for no caption).")
                 return
             sess["link"] = text
             sess["state"] = "await_btn_text"
-            safe_send_message(uid, "🔘 Send the BUTTON TEXT (e.g. Join Channel) or /skip to use default.")
+            bot.send_message(uid, "🔘 Send the BUTTON TEXT (e.g. Join Channel) or /skip to use default.")
             return
 
         if state == "await_btn_text":
@@ -522,7 +485,7 @@ def _broadcast_wizard_text(msg: types.Message):
             else:
                 sess["button_text"] = text
             sess["state"] = "await_caption"
-            safe_send_message(uid, "📝 Send the CAPTION for the media (or /skip for no caption).")
+            bot.send_message(uid, "📝 Send the CAPTION for the media (or /skip for no caption).")
             return
 
         if state == "await_caption":
@@ -537,14 +500,14 @@ def _broadcast_wizard_text(msg: types.Message):
                 markup.add(types.InlineKeyboardButton(sess.get("button_text", "Open"), url=sess.get("link")))
             # send preview
             if sess.get("media_type") == "photo":
-                safe_send_photo(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup if markup.inline_keyboard else None)
+                bot.send_photo(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup if markup.inline_keyboard else None)
             elif sess.get("media_type") == "video":
-                safe_send_video(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup if markup.inline_keyboard else None)
+                bot.send_video(uid, sess["media_file_id"], caption=sess.get("caption", ""), reply_markup=markup if markup.inline_keyboard else None)
             # show confirm/cancel
             confirm_markup = types.InlineKeyboardMarkup()
             confirm_markup.add(types.InlineKeyboardButton("✅ Confirm & Send", callback_data=f"bc_confirm_media:{uid}"))
             confirm_markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data=f"bc_cancel:{uid}"))
-            safe_send_message(uid, "Preview above. Confirm to broadcast to all groups where the bot is present.", reply_markup=confirm_markup)
+            bot.send_message(uid, "Preview above. Confirm to broadcast to all groups where the bot is present.", reply_markup=confirm_markup)
             return
 
         # ---------- schedule flow ----------
@@ -552,30 +515,30 @@ def _broadcast_wizard_text(msg: types.Message):
             if text.lower() in ("text", "media"):
                 sess["schedule_type"] = text.lower()
                 sess["state"] = "await_schedule_datetime"
-                safe_send_message(uid, "📅 Send SCHEDULE TIME in format: YYYY-MM-DD HH:MM (24h). Example: 2025-09-30 18:30")
+                bot.send_message(uid, "📅 Send SCHEDULE TIME in format: YYYY-MM-DD HH:MM (24h). Example: 2025-09-30 18:30")
             else:
-                safe_send_message(uid, "Please reply 'text' or 'media' to select schedule type.")
+                bot.send_message(uid, "Please reply 'text' or 'media' to select schedule type.")
             return
 
         if state == "await_schedule_datetime":
             # Basic validation of format
             sess["schedule_datetime"] = text
             sess["state"] = "await_schedule_recur"
-            safe_send_message(uid, "🔁 Recurrence? send one of: none / daily / weekly / monthly")
+            bot.send_message(uid, "🔁 Recurrence? send one of: none / daily / weekly / monthly")
             return
 
         if state == "await_schedule_recur":
             recur = text.lower()
             if recur not in ("none", "daily", "weekly", "monthly"):
-                return safe_send_message(uid, "Choose recurrence: none / daily / weekly / monthly")
+                return bot.send_message(uid, "Choose recurrence: none / daily / weekly / monthly")
             sess["schedule_recur"] = recur
             # next collect message or media depending on type
             if sess.get("schedule_type") == "text":
                 sess["state"] = "await_schedule_text"
-                safe_send_message(uid, "✍️ Send the TEXT to schedule.")
+                bot.send_message(uid, "✍️ Send the TEXT to schedule.")
             else:
                 sess["state"] = "await_schedule_media_upload"
-                safe_send_message(uid, "📸 Now send the IMAGE or VIDEO to schedule (in this chat).")
+                bot.send_message(uid, "📸 Now send the IMAGE or VIDEO to schedule (in this chat).")
             return
 
         if state == "await_schedule_text":
@@ -590,10 +553,10 @@ def _broadcast_wizard_text(msg: types.Message):
                     db.add_schedule(jobid, payload, None, run_time, recur)
                 except Exception:
                     logger.debug("db.add_schedule failed (maybe db not implemented).")
-                safe_send_message(uid, f"✅ Scheduled text broadcast at {run_time} recur={recur}. jobid={jobid}")
+                bot.send_message(uid, f"✅ Scheduled text broadcast at {run_time} recur={recur}. jobid={jobid}")
             except Exception as e:
                 logger.exception("Failed to schedule broadcast:")
-                safe_send_message(uid, f"⚠️ Failed to schedule: {e}")
+                bot.send_message(uid, f"⚠️ Failed to schedule: {e}")
             broadcast_sessions.pop(uid, None)
             return
 
@@ -603,7 +566,7 @@ def _broadcast_wizard_text(msg: types.Message):
             else:
                 sess["schedule_link"] = text
             sess["state"] = "await_schedule_btn_text"
-            safe_send_message(uid, "🔘 Send BUTTON TEXT for scheduled media (or /skip).")
+            bot.send_message(uid, "🔘 Send BUTTON TEXT for scheduled media (or /skip).")
             return
 
         if state == "await_schedule_btn_text":
@@ -612,7 +575,7 @@ def _broadcast_wizard_text(msg: types.Message):
             else:
                 sess["schedule_btn_text"] = text
             sess["state"] = "await_schedule_caption"
-            safe_send_message(uid, "📝 Send CAPTION for scheduled media (or /skip).")
+            bot.send_message(uid, "📝 Send CAPTION for scheduled media (or /skip).")
             return
 
         if state == "await_schedule_caption":
@@ -632,92 +595,104 @@ def _broadcast_wizard_text(msg: types.Message):
                     db.add_schedule(jobid, payload, media_file_id, run_time, recur)
                 except Exception:
                     logger.debug("db.add_schedule failed (maybe db not implemented).")
-                safe_send_message(uid, f"✅ Scheduled media broadcast at {run_time} recur={recur}. jobid={jobid}")
+                bot.send_message(uid, f"✅ Scheduled media broadcast at {run_time} recur={recur}. jobid={jobid}")
             except Exception as e:
                 logger.exception("Failed to schedule media broadcast:")
-                safe_send_message(uid, f"⚠️ Failed to schedule: {e}")
+                bot.send_message(uid, f"⚠️ Failed to schedule: {e}")
             broadcast_sessions.pop(uid, None)
             return
 
     except Exception as e:
         logger.exception("broadcast wizard text handler error:")
-        safe_send_message(uid, "⚠️ Error during broadcast wizard.")
+        bot.reply_to(msg, "⚠️ Error during broadcast wizard.")
 
-# =============== CONFIRM/CANCEL HANDLERS ==================
-@bot.callback_query_handler(func=lambda c: c.data and (c.data.startswith("bc_confirm_text") or c.data.startswith("bc_confirm_media") or c.data.startswith("bc_cancel")))
+# Callback handlers for confirm/cancel
+@bot.callback_query_handler(func=lambda c: c.data and (c.data.startswith("bc_confirm_") or c.data.startswith("bc_cancel:") ))
 def _broadcast_confirm_cancel(call: types.CallbackQuery):
-    uid = call.from_user.id
-    data = call.data
-    if not is_admin(uid):
-        return bot.answer_callback_query(call.id, "❌ Not allowed.")
+    data = call.data or ""
     try:
-        bot.answer_callback_query(call.id)
-    except Exception:
-        pass
-
-    # ---------- cancel ----------
-    if data.startswith("bc_cancel"):
-        broadcast_sessions.pop(uid, None)
-        return safe_send_message(uid, "❌ Broadcast cancelled.")
-
-    # ---------- text confirm ----------
-    if data.startswith("bc_confirm_text"):
-        sess = broadcast_sessions.pop(uid, None)
-        if not sess:
-            return safe_send_message(uid, "⚠️ Session expired.")
-        text = sess.get("broadcast_text", "")
-        groups = db.get_groups()
-        sent = 0
-        for gid in groups:
-            try:
-                ok = safe_send_message(gid, text)
-                if ok:
+        # pattern bc_confirm_text:<uid>, bc_confirm_media:<uid>, bc_cancel:<uid>
+        if data.startswith("bc_cancel:"):
+            parts = data.split(":", 1)
+            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
+            if call.from_user.id != uid:
+                return bot.answer_callback_query(call.id, "❌ Not allowed.")
+            broadcast_sessions.pop(uid, None)
+            bot.answer_callback_query(call.id)
+            return bot.send_message(uid, "✅ Broadcast cancelled.")
+        if data.startswith("bc_confirm_text:"):
+            parts = data.split(":", 1)
+            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
+            if call.from_user.id != uid and not is_admin(call.from_user.id):
+                return bot.answer_callback_query(call.id, "❌ Not allowed.")
+            sess = broadcast_sessions.get(uid)
+            if not sess or "broadcast_text" not in sess:
+                bot.answer_callback_query(call.id, "⚠️ No text to send.")
+                return
+            text = sess["broadcast_text"]
+            bot.answer_callback_query(call.id, "Sending broadcast...")
+            groups = db.get_groups()
+            sent = 0
+            for gid in groups:
+                try:
+                    bot.send_message(gid, text)
                     sent += 1
-                time.sleep(0.09)  # small delay for flood control
-            except Exception as e:
-                logger.warning(f"Broadcast text failed to {gid}: {e}")
-        return safe_send_message(uid, f"✅ Broadcast attempted. Successfully sent to {sent} groups (out of {len(groups)}).")
+                    time.sleep(0.06)
+                except Exception as e:
+                    logger.warning("Broadcast text failed to %s: %s", gid, e)
+            broadcast_sessions.pop(uid, None)
+            bot.send_message(uid, f"✅ Broadcast text sent to {sent} groups.")
+            return
 
-    # ---------- media confirm ----------
-    if data.startswith("bc_confirm_media"):
-        sess = broadcast_sessions.pop(uid, None)
-        if not sess:
-            return safe_send_message(uid, "⚠️ Session expired.")
-        groups = db.get_groups()
-        sent = 0
-        media_type = sess.get("media_type")
-        file_id = sess.get("media_file_id")
-        caption = sess.get("caption", "")
-        link = sess.get("link")
-        btn_text = sess.get("button_text", "Open")
-
-        markup = types.InlineKeyboardMarkup()
-        if link:
-            markup.add(types.InlineKeyboardButton(btn_text, url=link))
-
-        for gid in groups:
-            try:
-                ok = False
-                if media_type == "photo":
-                    ok = safe_send_photo(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
-                elif media_type == "video":
-                    ok = safe_send_video(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
-                if ok:
+        if data.startswith("bc_confirm_media:"):
+            parts = data.split(":", 1)
+            uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
+            if call.from_user.id != uid and not is_admin(call.from_user.id):
+                return bot.answer_callback_query(call.id, "❌ Not allowed.")
+            sess = broadcast_sessions.get(uid)
+            if not sess or "media_file_id" not in sess:
+                bot.answer_callback_query(call.id, "⚠️ No media to send.")
+                return
+            media_type = sess.get("media_type")
+            file_id = sess.get("media_file_id")
+            caption = sess.get("caption", "")
+            link = sess.get("link")
+            btn_text = sess.get("button_text", "Open")
+            markup = types.InlineKeyboardMarkup()
+            if link:
+                markup.add(types.InlineKeyboardButton(btn_text, url=link))
+            bot.answer_callback_query(call.id, "Sending broadcast...")
+            groups = db.get_groups()
+            sent = 0
+            for gid in groups:
+                try:
+                    if media_type == "photo":
+                        bot.send_photo(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
+                    elif media_type == "video":
+                        bot.send_video(gid, file_id, caption=caption or "", reply_markup=markup if markup.inline_keyboard else None)
                     sent += 1
-                time.sleep(0.09)
-            except Exception as e:
-                logger.warning(f"Broadcast media failed to {gid}: {e}")
-        return safe_send_message(uid, f"✅ Media broadcast attempted. Successfully sent to {sent} groups (out of {len(groups)}).")
+                    time.sleep(0.09)
+                except Exception as e:
+                    logger.warning("Broadcast media failed to %s: %s", gid, e)
+            broadcast_sessions.pop(uid, None)
+            bot.send_message(uid, f"✅ Broadcast media sent to {sent} groups.")
+            return
+    except Exception as e:
+        logger.exception("broadcast confirm handler error:")
+        try:
+            bot.answer_callback_query(call.id, "⚠️ Error processing broadcast.")
+        except Exception:
+            pass
 
 # =============== STICKER GRABBER ==================
 @bot.message_handler(commands=["grabsticker"])
 def grab_sticker(msg: types.Message):
     if not is_admin(msg.from_user.id):
-        return safe_send_message(msg.chat.id, "❌ Not allowed.")
+        return bot.reply_to(msg, "❌ Not allowed.")
     if not msg.reply_to_message or not msg.reply_to_message.sticker:
-        return safe_send_message(msg.chat.id, "⚠️ Reply to a sticker with this command to grab its file_id.")
+        return bot.reply_to(msg, "⚠️ Reply to a sticker with this command to grab its file_id.")
     sticker_id = msg.reply_to_message.sticker.file_id
-    safe_send_message(msg.chat.id, f"✅ Sticker file_id:\n<code>{sticker_id}</code>", parse_mode="HTML")
+    bot.reply_to(msg, f"✅ Sticker file_id:\n<code>{sticker_id}</code>", parse_mode="HTML")
 
 # =============== AI CHAT (main) ==================
 @bot.message_handler(func=lambda m: True, content_types=["text"])
@@ -726,17 +701,14 @@ def chat(msg: types.Message):
     if not should_reply(msg):
         return
     try:
-        try:
-            db.add_group(msg.chat.id)
-        except Exception:
-            pass
+        db.add_group(msg.chat.id)
         uid = str(msg.from_user.id)
         if not can_reply(uid):
             return
         db.add_memory(uid, "user", msg.text)
         mem = db.get_memory(uid, limit=6)
         if not ai:
-            return safe_send_message(msg.chat.id, "⚠️ AI not configured.")
+            return bot.send_message(msg.chat.id, "⚠️ AI not configured.")
         # persona prompt: Butki (female friendly funny)
         try:
             reply = ai.chat_reply(
@@ -750,11 +722,10 @@ def chat(msg: types.Message):
             logger.error(f"AI error: {e}")
             reply = "⚠️ Sorry, abhi thoda busy hoon 💖"
         db.add_memory(uid, "assistant", reply)
-        safe_send_message(msg.chat.id, reply)
+        bot.send_message(msg.chat.id, reply)
     except Exception as e:
         logger.exception("Chat error:")
-        # use safe send to avoid crashing if cannot message chat
-        safe_send_message(msg.chat.id, "⚠️ Error, please try again later.")
+        bot.reply_to(msg, "⚠️ Error, please try again later.")
 
 # =============== STICKERS ==================
 STICKER_IDS = [
@@ -773,25 +744,21 @@ def sticker(msg: types.Message):
         if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.5:
             prompt = f"Butki style me reply karo. User ne {emoji} sticker bheja hai."
             reply = ai.chat_reply(prompt)
-            # send AI reply safely
-            safe_send_message(msg.chat.id, reply)
+            bot.reply_to(msg, reply)
         else:
             if STICKER_IDS:
                 sticker_id = random.choice(STICKER_IDS)
-                # use safe_send_sticker to avoid exceptions crashing worker threads
-                safe_send_sticker(msg.chat.id, sticker_id, reply_to_message_id=msg.message_id)
+                bot.send_sticker(msg.chat.id, sticker_id, reply_to_message_id=msg.message_id)
             else:
-                safe_send_message(msg.chat.id, f"{emoji} Cute sticker!")
+                bot.reply_to(msg, f"{emoji} Cute sticker!")
     except Exception as e:
         logger.error(f"Sticker reply error: {e}")
-        # avoid replying to chat that may have blocked the bot; only log
-        # Optionally inform owner once (uncomment if you want owner notifications)
-        # safe_send_message(OWNER_ID, f"Sticker reply failed for chat {msg.chat.id}: {e}")
+        bot.reply_to(msg, f"{emoji} (sticker received)")
 
 # =============== GIF ==================
 @bot.message_handler(content_types=["animation"])
 def gif(msg: types.Message):
-    safe_send_message(msg.chat.id, "😂🔥 Cool GIF!")
+    bot.reply_to(msg, "😂🔥 Cool GIF!")
 
 # =============== WELCOME + GOODBYE ==================
 WELCOME_MSG = "🌸 Hey {name}, welcome to {chat}! 💖 Butki family me swagat hai 🎉"
@@ -802,7 +769,7 @@ def welcome(msg: types.Message):
     for user in msg.new_chat_members:
         try:
             text = WELCOME_MSG.format(name=user.first_name, chat=msg.chat.title)
-            safe_send_message(msg.chat.id, text)
+            bot.send_message(msg.chat.id, text)
         except Exception as e:
             logger.error(f"Welcome error: {e}")
 
@@ -811,7 +778,7 @@ def goodbye(msg: types.Message):
     user = msg.left_chat_member
     try:
         text = GOODBYE_MSG.format(name=user.first_name, chat=msg.chat.title)
-        safe_send_message(msg.chat.id, text)
+        bot.send_message(msg.chat.id, text)
     except Exception as e:
         logger.error(f"Goodbye error: {e}")
 
@@ -822,7 +789,7 @@ def schedule(msg):
         return
     parts = msg.text.split(" ", 4)
     if len(parts) < 4 and not msg.reply_to_message:
-        return safe_send_message(msg.chat.id, "Usage: /schedule YYYY-MM-DD HH:MM <recurring> message (or reply to media with caption)")
+        return bot.reply_to(msg, "Usage: /schedule YYYY-MM-DD HH:MM <recurring> message (or reply to media with caption)")
     try:
         _, d, t, r = parts[:4]
         payload = parts[4] if len(parts) > 4 else ""
@@ -843,10 +810,10 @@ def schedule(msg):
             db.add_schedule(jobid, payload, media, run_time, r)
         except Exception:
             logger.debug("db.add_schedule not available or failed.")
-        safe_send_message(msg.chat.id, f"✅ Scheduled {run_time} recurring={r} jobid={jobid}")
+        bot.reply_to(msg, f"✅ Scheduled {run_time} recurring={r} jobid={jobid}")
     except Exception as e:
         logger.exception("Schedule command error:")
-        safe_send_message(msg.chat.id, f"⚠️ Failed to schedule: {e}")
+        bot.reply_to(msg, f"⚠️ Failed to schedule: {e}")
 
 # =============== RESTORE SCHEDULES ==================
 try:
