@@ -717,7 +717,10 @@ def chat(msg: types.Message):
         bot.send_message(msg.chat.id, reply)
     except Exception as e:
         logger.exception("Chat error:")
-        bot.reply_to(msg, "⚠️ Error, please try again later.")
+        if msg.chat.type == "private":
+    bot.reply_to(msg, reply)
+else:
+    bot.send_message(msg.chat.id, reply)
 
 # =============== STICKERS ==================
 STICKER_IDS = [
@@ -736,7 +739,10 @@ def sticker(msg: types.Message):
         if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.5:
             prompt = f"Butki style me reply karo. User ne {emoji} sticker bheja hai."
             reply = ai.chat_reply(prompt)
-            bot.reply_to(msg, reply)
+            if msg.chat.type == "private":
+    bot.reply_to(msg, reply)
+else:
+    bot.send_message(msg.chat.id, reply)
         else:
             if STICKER_IDS:
                 sticker_id = random.choice(STICKER_IDS)
