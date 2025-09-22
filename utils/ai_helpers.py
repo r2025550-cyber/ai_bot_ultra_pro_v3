@@ -41,25 +41,30 @@ class AIHelper:
             "X-Title": "Butki AI Bot"
         }
 
-        try:
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json={
-                    "model": "gpt-4o-mini",   # OpenRouter free/fast model
-                    "messages": messages,
-                    "temperature": 0.9
-                },
-                timeout=30
-            )
+        # Models to try in order
+        models = ["openai/gpt-4o-mini", "anthropic/claude-3-haiku"]
 
-            if response.status_code == 200:
-                data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
-            else:
-                self.logger.error(f"AI API Error: {response.status_code} {response.text}")
-                return "⚠️ Sorry, abhi thoda busy hoon 💖"
+        for model in models:
+            try:
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "temperature": 0.9
+                    },
+                    timeout=30
+                )
 
-        except Exception as e:
-            self.logger.error(f"AI request failed: {e}")
-            return "⚠️ Sorry, abhi thoda busy hoon 💖"
+                if response.status_code == 200:
+                    data = response.json()
+                    return data["choices"][0]["message"]["content"].strip()
+                else:
+                    self.logger.error(f"AI API Error ({model}): {response.status_code} {response.text}")
+
+            except Exception as e:
+                self.logger.error(f"AI request failed ({model}): {e}")
+
+        # If all models fail
+        return "⚠️ Sorry, abhi thoda busy hoon 💖"
