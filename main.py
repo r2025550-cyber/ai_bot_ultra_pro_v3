@@ -717,7 +717,7 @@ def chat(msg: types.Message):
         bot.send_message(msg.chat.id, reply)
     except Exception as e:
         logger.exception("Chat error:")
-        if msg.chat.type == "private":
+if msg.chat.type == "private":
     bot.reply_to(msg, reply)
 else:
     bot.send_message(msg.chat.id, reply)
