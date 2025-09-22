@@ -690,56 +690,39 @@ def grab_sticker(msg: types.Message):
 # =============== CHAT HANDLER ==================
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def chat(msg: types.Message):
-    # Use your existing should_reply logic first
     if not should_reply(msg):
         return
 
-    # ignore bot's own messages
     if msg.from_user and getattr(msg.from_user, "is_bot", False):
         return
 
     text = (msg.text or "").strip()
     lower = text.lower()
 
-    # simple image-trigger keywords (adjust list if you want)
+    # Keywords for triggering image
     image_keywords = ["photo", "pic", "image", "picture", "meme", "photo of", "pic of", "picture of"]
 
-    # If user asked for an image, try HuggingFace generator first
     if any(k in lower for k in image_keywords):
         try:
-            # show typing/upload action
-            try:
-                bot.send_chat_action(msg.chat.id, "upload_photo")
-            except Exception:
-                pass
+            bot.send_chat_action(msg.chat.id, "upload_photo")
+        except Exception:
+            pass
 
-            # Build a clean prompt for image generation (you can improve this)
-            prompt = text
-            # Use ai.generate_image(prompt) — implement this in utils/ai_helpers.py
-            img_bytes = None
+        prompt = text
+        img_bytes, err = ai.generate_image(prompt)  # ✅ yaha change kiya
+
+        if img_bytes:
             try:
-                img_bytes = ai.generate_image(prompt)
+                bot.send_photo(msg.chat.id, img_bytes, caption="✨ Ye lo — tumhari image! 💖")
             except Exception as e:
-                logger.error("generate_image call failed: %s", e)
-
-            if img_bytes:
-                try:
-                    # img_bytes should be a file-like object (BytesIO)
-                    bot.send_photo(msg.chat.id, img_bytes, caption="✨ Ye lo — tumhari image! 💖")
-                except Exception as e:
-                    logger.error("send_photo failed: %s", e)
-                    bot.send_message(msg.chat.id, "⚠️ Image ready, lekin bhejne me problem aayi.")
-                return
-            else:
-                # fallback to text reply when image cannot be produced
-                bot.send_message(msg.chat.id, "⚠️ Image abhi generate nahi ho paayi — text se bata deti hoon.")
-                # continue to produce a normal text reply below
-
-        except Exception as e:
-            logger.error("Image flow error: %s", e)
+                logger.error("send_photo failed: %s", e)
+                bot.send_message(msg.chat.id, "⚠️ Image ready, lekin bhejne me problem aayi.")
+            return
+        else:
+            bot.send_message(msg.chat.id, f"⚠️ Image generate nahi ho paayi. {err or ''}")
             # fallthrough to text reply
 
-    # ---------- Normal text reply (OpenRouter / AI) ----------
+    # ---------- Normal text reply ----------
     try:
         db.add_group(msg.chat.id)
         uid = str(msg.from_user.id)
@@ -766,7 +749,6 @@ def chat(msg: types.Message):
 
         db.add_memory(uid, "assistant", reply)
 
-        # natural reply with fallback
         try:
             bot.reply_to(msg, reply)
         except Exception as e:
