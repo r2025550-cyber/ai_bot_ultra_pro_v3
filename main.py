@@ -693,14 +693,8 @@ def chat(msg: types.Message):
     if not should_reply(msg):
         return
 
-    # --- Filter: Butki sirf simple direct msg par reply kare ---
     if msg.from_user.is_bot:
         return
-    if msg.reply_to_message is not None:   # agar kisi reply me msg bheja gaya hai
-        return
-    if msg.text and "@" in msg.text:       # agar @mention hai
-        return
-    # ------------------------------------------------------------
 
     try:
         db.add_group(msg.chat.id)
@@ -741,16 +735,14 @@ def chat(msg: types.Message):
 # =============== STICKER HANDLER ==================
 @bot.message_handler(content_types=["sticker"])
 def sticker(msg: types.Message):
-    # --- Filters ---
+    if not should_reply(msg):
+        return
     if msg.from_user.is_bot:
         return
-    if msg.reply_to_message is not None:
-        return
-    # ---------------
 
     emoji = msg.sticker.emoji if msg.sticker else "🙂"
     try:
-        if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.7:  # zyada chance roleplay ka
+        if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.7:
             prompt = (
                 f"Tum ek ladki ho jiska naam 'Butki' hai 💖\n"
                 f"User ne ek {emoji} sticker bheja hai.\n"
