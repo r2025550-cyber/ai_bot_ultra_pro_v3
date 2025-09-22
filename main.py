@@ -151,18 +151,21 @@ def should_reply(msg: types.Message) -> bool:
         # fallback if chat type missing
         pass
 
-    # If message is a reply to someone
+    # ========== NEW FIX ==========
+    # Agar message kisi reply me hai
     if msg.reply_to_message:
         try:
-            if msg.reply_to_message.from_user and bot_id and msg.reply_to_message.from_user.id == bot_id:
-                # reply to bot -> reply
-                return True
-            else:
-                # reply to other human -> ignore
-                return False
+            if msg.reply_to_message.from_user:
+                if msg.reply_to_message.from_user.id == bot_id:
+                    # Agar reply bot ko diya hai → reply kare
+                    return True
+                else:
+                    # Agar reply kisi aur insaan ko diya hai → ignore
+                    return False
         except Exception:
             # On error default to not replying
             return False
+    # ==============================
 
     text = (msg.text or "") + " "  # avoid empty slice errors
     entities = msg.entities or []
@@ -179,9 +182,7 @@ def should_reply(msg: types.Message) -> bool:
                 if bot_username and bot_username in mention:
                     mentioned_bot = True
             elif ent.type == "text_mention":
-                # text_mention has a user attached (no @username) — this is a mention of a user
                 mentioned_someone = True
-                # if the user id equals bot id, it's a mention to bot
                 if ent.user and bot_id and ent.user.id == bot_id:
                     mentioned_bot = True
         except Exception:
@@ -195,7 +196,7 @@ def should_reply(msg: types.Message) -> bool:
     if mentioned_someone and not mentioned_bot:
         return False
 
-    # Extra: if there's an '@' sign but not bot mention -> skip (to avoid handles)
+    # Extra: if there's an '@' sign but not bot mention -> skip
     if "@" in text and not mentioned_bot and mentioned_someone:
         return False
 
