@@ -66,7 +66,7 @@ class AIHelper:
             self.logger.error("HUGGINGFACE_API_KEY not configured")
             return None
 
-        url = f"https://api-inference.huggingface.co/models/{model}"
+        url = f"https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {"Authorization": f"Bearer {self.hf_token}"}
         payload = {
             "inputs": prompt,
