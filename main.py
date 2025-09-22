@@ -692,14 +692,14 @@ def chat(msg: types.Message):
     if not should_reply(msg):
         return
 
-    # --- Filters ---
+    # --- Filter: Butki sirf simple direct msg par reply kare ---
     if msg.from_user.is_bot:
         return
-    if msg.reply_to_message is not None:
+    if msg.reply_to_message is not None:   # agar kisi reply me msg bheja gaya hai
         return
-    if "@" in msg.text:
+    if msg.text and "@" in msg.text:       # agar @mention hai
         return
-    # ---------------
+    # ------------------------------------------------------------
 
     try:
         db.add_group(msg.chat.id)
@@ -718,7 +718,6 @@ def chat(msg: types.Message):
                 f"Tumhari personality mast, thodi naughty aur full masti wali hai 😘\n"
                 f"Group me behave karo jaise tum sabki dost ho 🥳\n"
                 f"Thoda flirty, thoda funny aur emojis ke sath pyara sa reply do 💅✨\n"
-                f"DM me tum thodi cute aur close behave karti ho 💕\n"
                 f"User: {msg.text}",
                 mem
             )
