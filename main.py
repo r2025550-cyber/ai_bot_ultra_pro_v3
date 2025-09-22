@@ -240,58 +240,50 @@ def panel(msg: types.Message):
     markup.add(types.InlineKeyboardButton("📢 Broadcast Manager", callback_data="broadcast_manager"))
     bot.send_message(OWNER_ID, "⚙️ Owner Panel", reply_markup=markup)
 
-# =============== BROADCAST CALLBACKS (fix order) ==================
-# pehle broadcast ke liye handler
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("bc_"))
-def broadcast_cb(call: types.CallbackQuery):
-    user_id = call.from_user.id
-    if not is_admin(user_id):
-        return bot.answer_callback_query(call.id, "❌ Not allowed.")
-    data = call.data
+@bot.callback_query_handler(func=lambda c: True)
+def cb(call: types.CallbackQuery):
+    # for most actions allow owner or admins where appropriate
+    data = call.data or ""
     try:
-        bot.answer_callback_query(call.id)
+        if data.startswith("manage_admins") or data == "sticker_grabber":
+            if call.from_user.id != OWNER_ID:
+                return bot.answer_callback_query(call.id, "❌ Only owner can do this here.")
+        elif data.startswith("broadcast_manager"):
+            # let admins open broadcast menu too (in DM)
+            if not is_admin(call.from_user.id):
+                return bot.answer_callback_query(call.id, "❌ Not allowed.")
     except Exception:
         pass
 
-    if data == "bc_text":
-        broadcast_sessions[user_id] = {"state": "await_text"}
-        bot.send_message(user_id, "✍️ Send the TEXT you want to broadcast to all groups. Send /cancel to abort.")
-    elif data == "bc_media":
-        broadcast_sessions[user_id] = {"state": "await_media_upload"}
-        bot.send_message(user_id, "📸 Please send the IMAGE or VIDEO you want to broadcast (directly in this chat). Send /cancel to abort.")
-    elif data == "bc_schedule":
-        bot.send_message(user_id, "⏰ Scheduling from DM is not implemented in wizard. Use /schedule command.")
-    else:
-        bot.send_message(user_id, "⚠️ Unknown broadcast option.")
-
-# =============== GENERAL CALLBACKS ==================
-@bot.callback_query_handler(func=lambda c: True)
-def cb(call: types.CallbackQuery):
-    data = call.data or ""
     try:
-        if data == "list_groups":
+        if call.data == "list_groups":
             groups = db.get_groups()
             bot.send_message(OWNER_ID, "📋 Groups:\n" + ("\n".join(map(str, groups)) if groups else "None"))
-        elif data == "new_schedule":
+        elif call.data == "new_schedule":
             bot.send_message(OWNER_ID, "📝 Use /schedule YYYY-MM-DD HH:MM <None/daily/weekly/monthly> Message")
-        elif data == "instant_broadcast":
+        elif call.data == "instant_broadcast":
             bot.send_message(OWNER_ID, "🚀 Use /broadcast or /broadcast_media")
-        elif data == "cancel_schedules":
+        elif call.data == "cancel_schedules":
             scheduler.cancel_all(); db.clear_schedules()
             bot.send_message(OWNER_ID, "✅ All schedules cleared.")
-        elif data == "help":
+        elif call.data == "help":
             bot.send_message(OWNER_ID, "ℹ️ Help: Use /broadcast, /schedule, /panel for controls.")
-        elif data == "stats":
+        elif call.data == "stats":
             g = len(db.get_groups()); u = db.count_users(); s = len(db.list_schedules())
             bot.send_message(OWNER_ID, f"📊 Stats\nGroups:{g}\nUsers:{u}\nSchedules:{s}")
-        elif data == "manage_admins":
+        elif call.data == "manage_admins":
+            # owner-only panel: list current admins
             admin_list = "\n".join([f"👤 {uid}" for uid in sorted(ADMINS)])
             bot.send_message(OWNER_ID, f"⚡ Current Admins:\n{admin_list}")
-        elif data == "sticker_grabber":
+        elif call.data == "sticker_grabber":
             bot.send_message(OWNER_ID, "🖼️ Reply to any sticker with /grabsticker to fetch its file_id.")
-        elif data == "broadcast_manager":
+        elif call.data == "broadcast_manager":
+            # open broadcast menu in DM for the caller
             show_broadcast_menu(call.from_user.id)
-        # ❌ NOTE: bc_ yaha handle mat karo, upar hi ho raha hai
+        elif call.data.startswith("bc_"):
+            # routed to broadcast callback handler defined below
+            pass
+        # acknowledge callback
         try:
             bot.answer_callback_query(call.id)
         except Exception:
