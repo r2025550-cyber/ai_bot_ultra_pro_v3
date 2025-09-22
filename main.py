@@ -733,6 +733,14 @@ def chat(msg: types.Message):
         bot.send_message(msg.chat.id, "⚠️ Error, please try again later.")
 
 # =============== STICKER HANDLER ==================
+STICKER_IDS = [
+    "CAACAgUAAxkBAAMsaM0_Bknmh1kNnNzEH8GpllJ3HIUAAhsRAAJV8BFUGQQlAfumZL02BA",
+    "CAACAgEAAxkBAAMoaM03EtaeDFGFrsRC0MDNSM8LgbIAAu4AAyAK8EYrQPDMf_R-rDYE",
+    "CAACAgUAAxkBAAMmaM03DTk-hY3KvaMEPcsK548XFvsAApAUAALFL-BVvNXMv2XTJPg2BA",
+    "CAACAgUAAyEFAAStbkSDAAIBzmjNJBx_mcgcx3KBYU1O9dpWegpPAAI7FQACbMwgVFrPF5hMaq5UNgQ",
+    "CAACAgUAAxkBAANNaM1VMX0VXi_2ql897hzgwKnlkGQAAjsOAAIKCDlW81YQdhOWt402BA",
+]
+
 @bot.message_handler(content_types=["sticker"])
 def sticker(msg: types.Message):
     if not should_reply(msg):
