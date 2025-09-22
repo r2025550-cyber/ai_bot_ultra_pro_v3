@@ -686,11 +686,21 @@ def grab_sticker(msg: types.Message):
     sticker_id = msg.reply_to_message.sticker.file_id
     bot.reply_to(msg, f"✅ Sticker file_id:\n<code>{sticker_id}</code>", parse_mode="HTML")
 
-# =============== AI CHAT (main) ==================
+# =============== CHAT HANDLER ==================
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def chat(msg: types.Message):
     if not should_reply(msg):
         return
+
+    # --- Filters ---
+    if msg.from_user.is_bot:
+        return
+    if msg.reply_to_message is not None:
+        return
+    if "@" in msg.text:
+        return
+    # ---------------
+
     try:
         db.add_group(msg.chat.id)
         uid = str(msg.from_user.id)
@@ -705,19 +715,19 @@ def chat(msg: types.Message):
         try:
             reply = ai.chat_reply(
                 f"Tum ek ladki ho jiska naam 'Butki' hai 💖\n"
-                f"Tumhari personality funny, thodi naughty aur friendly hai 😘\n"
-                f"Roleplay style me har reply do, emojis ke sath 💅✨\n"
-                f"Group me sabko apna dost samjho 🥳 aur mazaak karo.\n"
+                f"Tumhari personality mast, thodi naughty aur full masti wali hai 😘\n"
+                f"Group me behave karo jaise tum sabki dost ho 🥳\n"
+                f"Thoda flirty, thoda funny aur emojis ke sath pyara sa reply do 💅✨\n"
+                f"DM me tum thodi cute aur close behave karti ho 💕\n"
                 f"User: {msg.text}",
                 mem
             )
         except Exception as e:
             logger.error(f"AI error: {e}")
-            reply = "⚠️ Sorry, abhi thoda busy hoon 💖"
+            reply = "⚠️ Sorry baby, abhi thoda busy hoon 💖"
 
         db.add_memory(uid, "assistant", reply)
 
-        # Try natural reply everywhere
         try:
             bot.reply_to(msg, reply)
         except Exception as e:
@@ -728,27 +738,30 @@ def chat(msg: types.Message):
         logger.exception("Chat error:")
         bot.send_message(msg.chat.id, "⚠️ Error, please try again later.")
 
-# =============== STICKERS ==================
-STICKER_IDS = [
-    # Keep your sticker ids (all provided ones)
-    "CAACAgUAAxkBAAMsaM0_Bknmh1kNnNzEH8GpllJ3HIUAAhsRAAJV8BFUGQQlAfumZL02BA",
-    "CAACAgEAAxkBAAMoaM03EtaeDFGFrsRC0MDNSM8LgbIAAu4AAyAK8EYrQPDMf_R-rDYE",
-    "CAACAgUAAxkBAAMmaM03DTk-hY3KvaMEPcsK548XFvsAApAUAALFL-BVvNXMv2XTJPg2BA",
-    "CAACAgUAAyEFAAStbkSDAAIBzmjNJBx_mcgcx3KBYU1O9dpWegpPAAI7FQACbMwgVFrPF5hMaq5UNgQ",
-    "CAACAgUAAxkBAANNaM1VMX0VXi_2ql897hzgwKnlkGQAAjsOAAIKCDlW81YQdhOWt402BA",
-]
-
+# =============== STICKER HANDLER ==================
 @bot.message_handler(content_types=["sticker"])
 def sticker(msg: types.Message):
+    # --- Filters ---
+    if msg.from_user.is_bot:
+        return
+    if msg.reply_to_message is not None:
+        return
+    # ---------------
+
     emoji = msg.sticker.emoji if msg.sticker else "🙂"
     try:
-        if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.5:
-            prompt = f"Butki style roleplay reply karo. User ne {emoji} sticker bheja hai."
+        if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.7:  # zyada chance roleplay ka
+            prompt = (
+                f"Tum ek ladki ho jiska naam 'Butki' hai 💖\n"
+                f"User ne ek {emoji} sticker bheja hai.\n"
+                f"Sticker dekh kar mast funny, flirty aur cute reply do 💅✨\n"
+                f"Har reply me emojis use karo jaise ek ladki naturally karti hai 😘"
+            )
             try:
                 reply = ai.chat_reply(prompt)
             except Exception as e:
                 logger.error(f"AI error (sticker): {e}")
-                reply = f"{emoji} Sorry, abhi thoda busy hoon 💖"
+                reply = f"{emoji} Awww, kitna cute sticker hai 💖"
 
             try:
                 bot.reply_to(msg, reply)
