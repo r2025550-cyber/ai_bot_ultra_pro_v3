@@ -1,54 +1,30 @@
-from openai import OpenAI
+import openai
 
 class AIHelper:
     def __init__(self, openai_api_key: str):
-        # Allow both old (sk-xxx) and new (sk-proj-xxx) formats
-        if not openai_api_key or not (
-            openai_api_key.startswith("sk-") or openai_api_key.startswith("sk-proj-")
-        ):
-            raise ValueError("❌ OPENAI_API_KEY is missing or invalid!")
+        # API key set karo
+        openai.api_key = openai_api_key
+        # OpenRouter ka endpoint use karo
+        openai.base_url = "https://openrouter.ai/api/v1"
 
-        self.client = OpenAI(api_key=openai_api_key)
+    def chat_reply(self, prompt: str, memory=None):
+        """
+        prompt: user ka input
+        memory: agar tum conversation history pass karna chaho
+        """
 
-    def chat_reply(self, user_text: str, memory=[]):
-        """
-        Generate a reply from AI model with short conversation memory.
-        """
-        try:
-            messages = [{"role": "system", "content": "You are a helpful Telegram AI bot."}]
+        messages = []
+        if memory:
             for role, content in memory:
                 messages.append({"role": role, "content": content})
-            messages.append({"role": "user", "content": user_text})
 
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",   # Lightweight fast model
-                messages=messages,
-                max_tokens=300
-            )
-            return response.choices[0].message.content.strip()
+        # user ka latest input
+        messages.append({"role": "user", "content": prompt})
 
-        except Exception as e:
-            print("AI ERROR (chat):", e)
-            return "⚠️ AI error, please try again later."
+        # OpenRouter API call
+        response = openai.chat.completions.create(
+            model="anthropic/claude-3.5-sonnet",   # 👈 default model
+            messages=messages,
+        )
 
-    def vision_describe(self, image_url: str):
-        """
-        Describe an image using GPT-4o-mini vision.
-        """
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an image analysis assistant."},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": "Describe this image in detail."},
-                        {"type": "image_url", "image_url": {"url": image_url}}
-                    ]}
-                ],
-                max_tokens=200
-            )
-            return response.choices[0].message.content.strip()
-
-        except Exception as e:
-            print("AI ERROR (vision):", e)
-            return "⚠️ Could not analyze the image."
+        return response.choices[0].message["content"]
