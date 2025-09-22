@@ -742,6 +742,7 @@ def sticker(msg: types.Message):
 reply = ai.chat_reply(prompt)
 if msg.chat.type == "private":
     bot.reply_to(msg, reply)
+
 else:
     bot.send_message(msg.chat.id, reply)
 else:
