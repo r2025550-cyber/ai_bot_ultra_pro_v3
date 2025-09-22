@@ -689,7 +689,6 @@ def grab_sticker(msg: types.Message):
 # =============== AI CHAT (main) ==================
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def chat(msg: types.Message):
-    # If this is a private admin doing broadcast wizard text steps, the wizard handlers (registered earlier) handle it.
     if not should_reply(msg):
         return
     try:
@@ -699,28 +698,35 @@ def chat(msg: types.Message):
             return
         db.add_memory(uid, "user", msg.text)
         mem = db.get_memory(uid, limit=6)
+
         if not ai:
             return bot.send_message(msg.chat.id, "⚠️ AI not configured.")
-        # persona prompt: Butki (female friendly funny)
+
         try:
             reply = ai.chat_reply(
                 f"Tum ek ladki ho jiska naam 'Butki' hai 💖\n"
                 f"Tumhari personality funny, thodi naughty aur friendly hai 😘\n"
-                f"Har reply me emojis aur ladki wali style ho 💅\n"
+                f"Har reply roleplay style me ho 💅\n"
+                f"Group me ho to sabko casual dosti wali ladki ki tarah jawab do 🥳✨\n"
                 f"User: {msg.text}",
                 mem
             )
         except Exception as e:
             logger.error(f"AI error: {e}")
             reply = "⚠️ Sorry, abhi thoda busy hoon 💖"
+
         db.add_memory(uid, "assistant", reply)
-        bot.send_message(msg.chat.id, reply)
+
+        # Natural reply everywhere with safe fallback
+        try:
+            bot.reply_to(msg, reply)
+        except Exception as e:
+            logger.error(f"Reply_to failed, fallback: {e}")
+            bot.send_message(msg.chat.id, reply)
+
     except Exception as e:
         logger.exception("Chat error:")
-if msg.chat.type == "private":
-    bot.reply_to(msg, reply)
-else:
-    bot.send_message(msg.chat.id, reply)
+        bot.send_message(msg.chat.id, "⚠️ Error, please try again later.")
 
 # =============== STICKERS ==================
 STICKER_IDS = [
@@ -737,25 +743,30 @@ def sticker(msg: types.Message):
     emoji = msg.sticker.emoji if msg.sticker else "🙂"
     try:
         if ai and can_reply(str(msg.from_user.id)) and random.random() < 0.5:
-            prompt = f"Butki style me reply karo. User ne {emoji} sticker bheja hai."
-            reply = ai.chat_reply(prompt)
-reply = ai.chat_reply(prompt)
-if msg.chat.type == "private":
-    bot.reply_to(msg, reply)
+            prompt = f"Butki style me roleplay reply karo. User ne {emoji} sticker bheja hai."
+            try:
+                reply = ai.chat_reply(prompt)
+            except Exception as e:
+                logger.error(f"AI error (sticker): {e}")
+                reply = f"{emoji} Sorry, abhi thoda busy hoon 💖"
 
-else:
-    bot.send_message(msg.chat.id, reply)
-else:
-    bot.send_message(msg.chat.id, reply)
+            # Natural reply everywhere with safe fallback
+            try:
+                bot.reply_to(msg, reply)
+            except Exception as e:
+                logger.error(f"Reply_to failed (sticker), fallback: {e}")
+                bot.send_message(msg.chat.id, reply)
+
         else:
             if STICKER_IDS:
                 sticker_id = random.choice(STICKER_IDS)
                 bot.send_sticker(msg.chat.id, sticker_id, reply_to_message_id=msg.message_id)
             else:
-                bot.reply_to(msg, f"{emoji} Cute sticker!")
+                bot.send_message(msg.chat.id, f"{emoji} Cute sticker!")
+
     except Exception as e:
         logger.error(f"Sticker reply error: {e}")
-        bot.reply_to(msg, f"{emoji} (sticker received)")
+        bot.send_message(msg.chat.id, f"{emoji} (sticker received)")
 
 # =============== GIF ==================
 @bot.message_handler(content_types=["animation"])
