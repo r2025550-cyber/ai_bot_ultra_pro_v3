@@ -696,9 +696,11 @@ def grab_sticker(msg: types.Message):
 # =============== CHAT HANDLER ==================
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def chat(msg: types.Message):
+    # Ignore if we should not reply
     if not should_reply(msg):
         return
 
+    # Ignore bot's own messages
     if msg.from_user and getattr(msg.from_user, "is_bot", False):
         return
 
@@ -708,27 +710,33 @@ def chat(msg: types.Message):
     # Keywords for triggering image
     image_keywords = ["photo", "pic", "image", "picture", "meme", "photo of", "pic of", "picture of"]
 
+    # ========== IMAGE FLOW ==========
     if any(k in lower for k in image_keywords):
         try:
-            bot.send_chat_action(msg.chat.id, "upload_photo")
-        except Exception:
-            pass
-
-        prompt = text
-        img_bytes, err = ai.generate_image(prompt)  # ✅ yaha change kiya
-
-        if img_bytes:
             try:
-                bot.send_photo(msg.chat.id, img_bytes, caption="✨ Ye lo — tumhari image! 💖")
-            except Exception as e:
-                logger.error("send_photo failed: %s", e)
-                bot.send_message(msg.chat.id, "⚠️ Image ready, lekin bhejne me problem aayi.")
-            return
-        else:
-            bot.send_message(msg.chat.id, f"⚠️ Image generate nahi ho paayi. {err or ''}")
+                bot.send_chat_action(msg.chat.id, "upload_photo")
+            except Exception:
+                pass
+
+            prompt = text
+            img_bytes, err = ai.generate_image(prompt)  # ✅ Updated handling
+
+            if img_bytes:
+                try:
+                    bot.send_photo(msg.chat.id, img_bytes, caption="✨ Ye lo — tumhari image! 💖")
+                except Exception as e:
+                    logger.error("send_photo failed: %s", e)
+                    bot.send_message(msg.chat.id, "⚠️ Image ready, lekin bhejne me problem aayi.")
+                return
+            else:
+                bot.send_message(msg.chat.id, f"⚠️ Image generate nahi ho paayi. {err or ''}")
+                # fallthrough to text reply
+
+        except Exception as e:
+            logger.error("Image flow error: %s", e)
             # fallthrough to text reply
 
-    # ---------- Normal text reply ----------
+    # ========== TEXT FLOW ==========
     try:
         db.add_group(msg.chat.id)
         uid = str(msg.from_user.id)
