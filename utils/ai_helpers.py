@@ -1,5 +1,6 @@
 import requests
 import logging
+import json
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ class AIHelper:
                 "max_tokens": 500
             }
 
+            logger.info(f"Sending prompt to OpenRouter model={model}: {prompt[:100]}...")
+
             resp = requests.post(url, headers=headers, json=data, timeout=30)
             resp.raise_for_status()
             j = resp.json()
@@ -49,12 +52,18 @@ class AIHelper:
 
         try:
             url = f"https://api-inference.huggingface.co/models/{model}"
-            headers = {"Authorization": f"Bearer {self.hf_api_key}"}
+            headers = {
+                "Authorization": f"Bearer {self.hf_api_key}",
+                "Content-Type": "application/json"
+            }
             payload = {"inputs": prompt}
 
-            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            logger.info(f"HF request sent to {url} with prompt: {prompt}")
+
+            resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
 
             if resp.status_code == 200:
+                logger.info("HF image generation success ✅")
                 return BytesIO(resp.content), None   # ab bot.send_photo ke liye ready hai
             else:
                 logger.error(f"HF error {resp.status_code}: {resp.text}")
