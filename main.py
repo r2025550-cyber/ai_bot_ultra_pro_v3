@@ -42,23 +42,29 @@ if os.path.exists("config.json"):
         CONFIG = {}
 
 # --- Load env vars ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or CONFIG.get("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or CONFIG.get("OPENAI_API_KEY")
-OWNER_ID = int(os.getenv("OWNER_ID", str(CONFIG.get("OWNER_ID", "0")) or "0"))
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or CONFIG.get("TELEGRAM_TOKEN", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or CONFIG.get("OPENAI_API_KEY", "")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY") or CONFIG.get("HUGGINGFACE_API_KEY", "")
+OWNER_ID = int(os.getenv("OWNER_ID", str(CONFIG.get("OWNER_ID", "0"))))
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE") or CONFIG.get("DEFAULT_TIMEZONE", "Asia/Kolkata")
 
 # --- Debug print ---
-print("DEBUG >> TELEGRAM_TOKEN starts with:", mask_secret(TELEGRAM_TOKEN, 8))
-print("DEBUG >> OPENAI_API_KEY starts with:", mask_secret(OPENAI_API_KEY, 8))
+print("DEBUG >> TELEGRAM_TOKEN starts with:", mask_secret(TELEGRAM_TOKEN))
+print("DEBUG >> OPENAI_API_KEY starts with:", mask_secret(OPENAI_API_KEY))
+print("DEBUG >> HUGGINGFACE_API_KEY starts with:", mask_secret(HUGGINGFACE_API_KEY))
 print("DEBUG >> OWNER_ID:", OWNER_ID)
 print("DEBUG >> DEFAULT_TIMEZONE:", DEFAULT_TIMEZONE)
 
 # --- Validate Telegram token ---
 if not TELEGRAM_TOKEN or ":" not in TELEGRAM_TOKEN:
-    raise ValueError(f"❌ TELEGRAM_TOKEN invalid or missing! Got: {mask_secret(TELEGRAM_TOKEN)}")
+    raise ValueError("❌ TELEGRAM_TOKEN invalid or missing")
 
 # --- Initialize bot ---
 bot = TeleBot(TELEGRAM_TOKEN, parse_mode="HTML")
+
+# --- Initialize AI helper (OpenRouter + HuggingFace) ---
+from utils.ai_helpers import AIHelper
+ai = AIHelper(openai_api_key=OPENAI_API_KEY, hf_api_key=HUGGINGFACE_API_KEY)
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO)
